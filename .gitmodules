@@ -1,0 +1,6 @@
+[submodule "test/ciphers/noble-ciphers"]
+	path = test/ciphers/noble-ciphers
+	url = https://github.com/paulmillr/noble-ciphers
+[submodule "test/hashes/noble-hashes"]
+	path = test/hashes/noble-hashes
+	url = https://github.com/paulmillr/noble-hashes

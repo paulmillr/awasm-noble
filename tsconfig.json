@@ -1,0 +1,20 @@
+{
+  "extends": "@paulmillr/jsbt/tsconfig.json",
+  "compilerOptions": {
+    "outDir": ".",
+    "allowJs": true,
+    "isolatedDeclarations": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "tmp",
+    "build",
+    "*.js",
+    "*.js.map",
+    "*.d.ts"
+  ]
+}

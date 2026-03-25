@@ -1,0 +1,12 @@
+node_modules
+*.tgz
+/*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+/test/build
+/test/compiled
+/esm
+/src/targets
+/targets
+/modules

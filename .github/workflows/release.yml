@@ -1,0 +1,11 @@
+name: Publish release
+on:
+  release:
+    types: [created]
+jobs:
+  release-js:
+    name: 'jsbt v0.5.0' # Should match commit below
+    uses: paulmillr/jsbt/.github/workflows/release.yml@8a0e8bacab177cbe72ee412345d42331cfc0a261
+    permissions:
+      contents: read
+      id-token: write
