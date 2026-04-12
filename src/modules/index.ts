@@ -36,7 +36,8 @@ import {
 import { genArgon2, genScrypt } from './kdf.ts';
 import { genGhash, genPoly1305, genPolyval } from './mac.ts';
 
-// Keep the generator registry obviously pure so runtime tree-shaking can drop unrelated module builders.
+// Keep the generator registry obviously pure.
+// That lets runtime tree-shaking drop unrelated module builders.
 export const GENERATORS = /* @__PURE__ */ Object.freeze({
   genKeccak,
   genSha1,
@@ -106,7 +107,8 @@ type ModuleSpec<K extends keyof typeof GENERATORS> = {
 };
 type AnyModuleSpec = { [K in keyof typeof GENERATORS]: ModuleSpec<K> }[keyof typeof GENERATORS];
 
-// Runtime builds import only a few module specs; keep each spec on its own export so unused ones can disappear.
+// Runtime builds import only a few module specs.
+// Keep each spec on its own export so unused ones can disappear.
 export const keccak24 = {
   fn: 'genKeccak',
   type: 'u64',
@@ -151,6 +153,8 @@ export const md5 = {
   opts: undefined,
   compilerOpts: {},
 } satisfies ModuleSpec<'genMd5'>;
+// Blake1 legacy round counts differ from Blake2: blake256 uses 14 vs blake2s 10,
+// and blake512 uses 16 vs blake2b 12.
 export const blake256 = {
   fn: 'genBlake1',
   type: 'u32',

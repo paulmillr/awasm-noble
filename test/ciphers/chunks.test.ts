@@ -1,7 +1,9 @@
 import { describe, should } from '@paulmillr/jsbt/test.js';
-import { deepStrictEqual as eql } from 'node:assert';
+import { deepStrictEqual as eql, throws } from 'node:assert';
 import { randomBytes } from '@noble/hashes/utils.js';
 import { concatBytes } from '../../src/utils.ts';
+import { mkCipher } from '../../src/ciphers-abstract.ts';
+import { aessiv } from '../../src/ciphers.ts';
 
 const empty = new Uint8Array(0);
 
@@ -509,4 +511,37 @@ const test = (name: string, platform: any) => {
 
 import { PLATFORMS } from '../platforms.ts';
 for (const k in PLATFORMS) test(k, PLATFORMS[k]);
+should('aessiv invalid-tag decrypt clears caller output before throwing', () => {
+  const buffer = new Uint8Array(16);
+  const state = new Uint8Array(16);
+  const plain = new Uint8Array(16).fill(0x42);
+  const mod = {
+    segments: { buffer, state },
+    reset(maxWritten: number) {
+      buffer.fill(0, 0, maxWritten);
+      state.fill(0);
+    },
+    encryptBlocks() {},
+    decryptBlocks(_blocks: number, _isLast: number, _left: number, round = 0) {
+      if (round === 0) buffer.set(plain);
+    },
+  };
+  const def = {
+    blockLen: aessiv.blockLen,
+    tagLength: aessiv.tagLength,
+    tagLeft: aessiv.tagLeft,
+    noStream: aessiv.noStream,
+    multiPass: aessiv.multiPass,
+    multiPassResult: aessiv.multiPassResult,
+    multiPassOut: aessiv.multiPassOut,
+    init: () => undefined,
+    getTag: () => new Uint8Array(16),
+  };
+  const cipher = mkCipher(() => mod, def)(new Uint8Array(32));
+  const ciphertext = new Uint8Array(32);
+  ciphertext.fill(0xff, 0, 16);
+  const out = new Uint8Array(16).fill(0xa5);
+  throws(() => cipher.decrypt(ciphertext, out), /invalid tag/);
+  eql(out, new Uint8Array(16));
+});
 should.runWhen(import.meta.url);

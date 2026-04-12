@@ -27,7 +27,9 @@ const wrapCipher = (platform: Record<string, any>) => {
   const copy = (fn: any, run: (...args: any[]) => any) => Object.assign(run, fn);
   const stream = (fn: any) =>
     fn &&
-    copy(fn, (key: any, nonce: any, data: any, out?: any) => fn(key, nonce).encrypt(data, out));
+    copy(fn, (key: any, nonce: any, data: any, out?: any, counter?: any) =>
+      (counter === undefined ? fn(key, nonce) : fn(key, nonce, { counter })).encrypt(data, out)
+    );
   const webCipher = (fn: any) =>
     fn &&
     copy(fn, (key: any, nonce: any, aad?: any) => {
@@ -38,24 +40,15 @@ const wrapCipher = (platform: Record<string, any>) => {
       };
     });
   const webGcm = copy(web.gcm, (key: any, nonce: any, aad?: any) => {
-    const keyParams = { name: 'AES-GCM', length: key.length * 8 };
-    const cryptParams =
-      aad === undefined
-        ? { name: 'AES-GCM', iv: nonce }
-        : { name: 'AES-GCM', iv: nonce, additionalData: aad };
-    let consumed = false;
+    const i = aad === undefined ? web.gcm(key, nonce) : web.gcm(key, nonce, aad);
     return {
-      encrypt: (data: any) => {
-        if (consumed) throw new Error('Cannot encrypt() twice with same key / nonce');
-        consumed = true;
-        return web.utils.encrypt(key, keyParams, cryptParams, data);
-      },
-      decrypt: (data: any) => web.utils.decrypt(key, keyParams, cryptParams, data),
+      encrypt: (data: any) => i.encrypt.async(data),
+      decrypt: (data: any) => i.decrypt.async(data),
     };
   });
   return {
     ...platform,
-    cmac: platform.cmac && copy(platform.cmac, (key: any, msg: any) => platform.cmac(msg, key)),
+    cmac: platform.cmac && copy(platform.cmac, (msg: any, key: any) => platform.cmac(msg, key)),
     poly1305:
       platform.poly1305 &&
       copy(platform.poly1305, (msg: any, key: any) => platform.poly1305(msg, { key })),
@@ -75,7 +68,13 @@ export const getCipherPlatforms = () =>
     Object.entries(PLATFORMS).map(([name, platform]) => [name, wrapCipher(platform)])
   );
 const wrapHash = (platform: Record<string, any>) => {
-  const webHash = (fn: any) => fn && Object.assign((msg: any) => fn.async(msg), fn, { raw: fn });
+  const webHash = (fn: any) => {
+    if (!fn) return fn;
+    const hash = Object.assign((msg: any) => fn.async(msg), fn, { raw: fn });
+    // Keep the wrapped WebCrypto hash surface frozen so callers can't retarget metadata like
+    // `webCryptoName` after construction; the shared tests only verify that contract.
+    return Object.freeze(hash);
+  };
   const rawHash = (fn: any) => fn?.raw || fn;
   const shared = {
     ...platform,
@@ -84,6 +83,7 @@ const wrapHash = (platform: Record<string, any>) => {
     extract,
     expand,
     // Shared noble-hashes tests need the resident scrypt batch size here, not the old N+p estimate.
+    scryptMaxmemFormula: '128*r*N*maxP',
     scryptMaxmem: ({ N, r, p }: any) =>
       128 * r * N * Math.min(p, Math.floor(SCRYPT_BATCH / (2 * r))),
     pbkdf2: (hash: any, password: any, salt: any, opts: any) => pbkdf2(hash)(password, salt, opts),

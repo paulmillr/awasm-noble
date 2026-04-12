@@ -19,6 +19,9 @@ import {
   utf8ToBytes,
   type AsyncOpts,
   type AsyncSetup,
+  type KDFInput,
+  type TArg,
+  type TRet,
 } from './utils.ts';
 
 // Generic KDF stuff
@@ -29,24 +32,26 @@ type KDFOpts = {
   onProgress?: (progress: number) => void;
   nextTick?: () => Promise<void>;
 };
-/** KDFs can accept string or Uint8Array for user convenience. */
-type KDFInput = string | Uint8Array;
-
 export type KDF<Opts extends KDFOpts> = ((
-  password: KDFInput,
-  salt: KDFInput,
-  opts: Opts
-) => Uint8Array) & {
-  async: (password: KDFInput, salt: KDFInput, opts: Opts) => Promise<Uint8Array>;
+  password: TArg<KDFInput>,
+  salt: TArg<KDFInput>,
+  opts: TArg<Opts>
+) => TRet<Uint8Array>) & {
+  async: (
+    password: TArg<KDFInput>,
+    salt: TArg<KDFInput>,
+    opts: TArg<Opts>
+  ) => Promise<TRet<Uint8Array>>;
   getPlatform: () => string | undefined;
-  getDefinition: () => any;
+  getDefinition: () => TRet<any>;
 };
 
 /**
  * Helper for KDFs: consumes uint8array or string.
- * When string is passed, does utf8 decoding, using TextDecoder.
+ * When string is passed, encodes it as UTF-8 bytes; Uint8Array inputs
+ * are only type-checked and returned without cloning.
  */
-function kdfInputToBytes(data: KDFInput, errorTitle = ''): Uint8Array {
+function kdfInputToBytes(data: TArg<KDFInput>, errorTitle = ''): TRet<Uint8Array> {
   if (typeof data === 'string') return utf8ToBytes(data);
   return abytes(data, undefined, errorTitle);
 }
@@ -61,27 +66,38 @@ function isBranded(x: unknown): x is object {
 
 function mkKDF<O extends KDFOpts>(
   defOpts: Partial<O> & { dkLen: number; maxmem: number },
-  cb: (
+  cb_: TArg<
+    (
+      setup: AsyncSetup,
+      password: Uint8Array,
+      salt: Uint8Array,
+      opts: O & { dkLen: number; maxmem: number }
+    ) => Generator<unknown, TRet<Uint8Array>, unknown>
+  >,
+  definition?: any,
+  platform?: string
+) {
+  const cb = cb_ as (
     setup: AsyncSetup,
     password: Uint8Array,
     salt: Uint8Array,
     opts: O & { dkLen: number; maxmem: number }
-  ) => Generator<unknown, Uint8Array, unknown>,
-  definition?: any,
-  platform?: string
-) {
-  const res = mkAsync((setup, password: KDFInput, salt: KDFInput, opts: O) => {
-    password = kdfInputToBytes(password, 'password');
-    salt = kdfInputToBytes(salt, 'salt');
-    abytes(password);
-    abytes(salt);
-    const _opts = checkOpts({ ...defOpts }, opts);
-    const { dkLen, asyncTick, maxmem, onProgress } = _opts;
-    anumber(dkLen);
-    anumber(maxmem);
-    const _setup = (opts: AsyncOpts) => setup({ asyncTick, onProgress, ...opts });
-    return cb(_setup, password, salt, _opts);
-  });
+  ) => Generator<unknown, TRet<Uint8Array>, unknown>;
+  const res = mkAsync(
+    (setup: TArg<AsyncSetup>, password: TArg<KDFInput>, salt: TArg<KDFInput>, opts: TArg<O>) => {
+      password = kdfInputToBytes(password, 'password');
+      salt = kdfInputToBytes(salt, 'salt');
+      abytes(password);
+      abytes(salt);
+      const _opts = checkOpts({ ...defOpts }, opts);
+      const { dkLen, asyncTick, maxmem, onProgress, nextTick } = _opts;
+      anumber(dkLen, 'dkLen');
+      anumber(maxmem, 'maxmem');
+      const _setup = (opts: TArg<AsyncOpts>) =>
+        setup({ asyncTick, onProgress, nextTick, ...(opts as AsyncOpts) });
+      return cb(_setup, password, salt, _opts as O & { dkLen: number; maxmem: number });
+    }
+  );
   Object.assign(res, {
     getPlatform: () => platform,
     getDefinition: () => definition,
@@ -93,18 +109,19 @@ function mkKDF<O extends KDFOpts>(
 
 type Stub<Opts extends KDFOpts> = { install: (impl: KDF<Opts>) => void };
 export function mkKDFStub<Opts extends KDFOpts>(
-  _def: (mod: any, deps: any, platform: string) => KDF<Opts>
-): KDF<Opts> & Stub<Opts> {
+  _def_: TArg<(mod: any, deps: any, platform: string) => KDF<Opts>>
+): TRet<KDF<Opts> & Stub<Opts>> {
+  const _def = _def_ as (mod: any, deps: any, platform: string) => KDF<Opts>;
   let inner: KDF<Opts> | undefined;
-  function checkInner(inner: KDF<Opts> | undefined): asserts inner is KDF<Opts> {
+  function checkInner(inner: TArg<KDF<Opts> | undefined>): asserts inner is KDF<Opts> {
     if (inner === undefined) throw new Error('implementation not installed');
   }
-  const kdf = ((password: KDFInput, salt: KDFInput, opts = {} as Opts) => {
+  const kdf = ((password: TArg<KDFInput>, salt: TArg<KDFInput>, opts = {} as Opts) => {
     checkInner(inner);
     return inner(password, salt, opts);
   }) as KDF<Opts> & Stub<Opts>;
   Object.assign(kdf, {
-    async: async (password: KDFInput, salt: KDFInput, opts = {} as Opts) => {
+    async: async (password: TArg<KDFInput>, salt: TArg<KDFInput>, opts = {} as Opts) => {
       checkInner(inner);
       return inner.async(password, salt, opts);
     },
@@ -116,19 +133,16 @@ export function mkKDFStub<Opts extends KDFOpts>(
       checkInner(inner);
       return inner.getDefinition();
     },
-    install: (impl: KDF<Opts>) => {
+    install: (impl: TArg<KDF<Opts>>) => {
       if (!isBranded(impl)) throw new Error('install: non-branded implementation');
-      // NOTE: this strict check works because all implementations will use exact same frozen definition
-      // which means it is impossible to use same blockLen/outputLen hash from different definition
-      // if (impl.getDefinition() !== def) {
-      //   console.log('DEF', def);
-      //   console.log('GET DEF', getD);
-      //   throw new Error('wrong implementation definition');
-      // }
-      inner = impl;
+      // NOTE: this strict check works because all implementations use the same
+      // exported KDF factory function, so a same-shaped different KDF family
+      // cannot be installed here.
+      if (impl.getDefinition() !== _def) throw new Error('wrong implementation definition');
+      inner = impl as KDF<Opts>;
     },
   });
-  return Object.freeze(kdf);
+  return Object.freeze(kdf) as TRet<KDF<Opts> & Stub<Opts>>;
 }
 
 /**
@@ -138,7 +152,9 @@ export function mkKDFStub<Opts extends KDFOpts>(
 const AT = { Argon2d: 0, Argon2i: 1, Argon2id: 2 } as const;
 type Types = (typeof AT)[keyof typeof AT];
 
-const abytesOrZero = (buf?: KDFInput) => {
+// RFC 9106 Figure 1 preserves LE32(length(K/X)) even when the optional
+// payload is absent, so undefined maps to an empty byte string here.
+const abytesOrZero = (buf?: TArg<KDFInput>) => {
   if (buf === undefined) return Uint8Array.of();
   return kdfInputToBytes(buf);
 };
@@ -158,21 +174,24 @@ export type ArgonOpts = KDFOpts & {
   personalization?: KDFInput; // Optional arbitrary extra data
 };
 
+// Exclusive `2^32` sentinel used by `isU32(...)`, not the inclusive maximum u32 value.
 const maxUint32 = /* @__PURE__ */ Math.pow(2, 32);
+// Validate safe JS integers in `[0, 2^32 - 1]`.
 function isU32(num: number) {
   return Number.isSafeInteger(num) && num >= 0 && num < maxUint32;
 }
 
-function argon2Opts(opts: ArgonOpts) {
+function argon2Opts(opts: TArg<ArgonOpts>) {
   const merged: any = {
     version: 0x13,
     dkLen: 32,
     maxmem: maxUint32 - 1,
     asyncTick: 10,
   };
-  for (let [k, v] of Object.entries(opts)) if (v != null) merged[k] = v;
+  for (let [k, v] of Object.entries(opts)) if (v !== undefined) merged[k] = v;
 
   const { dkLen, p, m, t, version, onProgress } = merged;
+  // RFC 9106 §3.1: tag length `T` MUST be an integer number of bytes from 4 to 2^32-1.
   if (!isU32(dkLen) || dkLen < 4) throw new Error('dkLen should be at least 4 bytes');
   if (!isU32(p) || p < 1 || p >= Math.pow(2, 24)) throw new Error('p should be 1 <= p < 2^24');
   if (!isU32(m)) throw new Error('m should be 0 <= m < 2^32');
@@ -180,32 +199,40 @@ function argon2Opts(opts: ArgonOpts) {
   if (onProgress !== undefined && typeof onProgress !== 'function')
     throw new Error('progressCb should be function');
   /*
-  Memory size m MUST be an integer number of kibibytes from 8*p to 2^(32)-1. The actual number of blocks is m', which is m rounded down to the nearest multiple of 4*p.
+  Memory size m MUST be an integer number of kibibytes from 8*p to 2^(32)-1.
+  The actual number of blocks is m', which is m rounded down to the nearest
+  multiple of 4*p.
   */
   if (!isU32(m) || m < 8 * p) throw new Error('memory should be at least 8*p bytes');
+  // Accept legacy `0x10` for compatibility even though RFC 9106 profiles standardize `0x13`.
   if (version !== 0x10 && version !== 0x13) throw new Error('unknown version=' + version);
   return merged;
 }
 
 // Keep exported size caps behind pure calls so unrelated KDF bundles can drop them.
 export const ARGON_MAX_BLOCKS = /* @__PURE__ */ (() => 10 * 1024)();
+// RFC 9106 sync points constant `SL = 4`, fixed by the design rather than exposed as a tuning knob.
 export const ARGON2_SYNC_POINTS = 4;
 
 function mkArgon2(
   type: Types,
-  modFn: () => ARGON2,
-  deps: { blake2b: HashInstance<any> },
-  platform: string
+  modFn: TArg<() => ARGON2>,
+  deps: TArg<{ blake2b: HashInstance<any> }>,
+  platform: string,
+  definition?: any
 ) {
   const { blake2b } = deps;
   let mod: ARGON2;
+  // Instantiate the backend lazily once so importing Argon2 surfaces does not build it eagerly.
   const initMod = () => {
     if (mod === undefined) mod = modFn();
   };
-  function Hp(A: Uint32Array, dkLen: number) {
+  function Hp(A: TArg<Uint32Array>, dkLen: number) {
     const A8 = u8(A);
     const T = new Uint32Array(1);
     const T8 = u8(T);
+    // RFC 9106 Figure 8 prefixes `T` as `LE32(T)`, so this direct word view relies on the
+    // surrounding Uint32Array byte order already being little-endian.
     T[0] = dkLen;
     // Fast path
     if (dkLen <= 64) return blake2b.chunks([T8, A8], { dkLen });
@@ -223,11 +250,19 @@ function mkArgon2(
     // Last block
     out.set(blake2b(V, { dkLen: dkLen - pos }), pos);
     clean(V, T);
-    return u32(out);
+    // H' is byte-oriented; returning `u32(out)` would silently drop dkLen % 4 tail bytes.
+    return out;
   }
   return mkKDF<ArgonOpts>(
+    // Local safety cap: default `maxmem` stays near 1 GiB so callers must opt in before allocating
+    // larger Argon2 matrices.
     { dkLen: 32, maxmem: 1024 ** 3 + 1024 },
-    function* (setup, password, salt, opts) {
+    function* (
+      setup: TArg<AsyncSetup>,
+      password: TArg<Uint8Array>,
+      salt: TArg<Uint8Array>,
+      opts: TArg<ArgonOpts & { dkLen: number; maxmem: number }>
+    ) {
       initMod();
       const INDICES = u32(mod.segments.indices);
       const REF_INDICES = u32(mod.segments.refIndices);
@@ -264,16 +299,21 @@ function mkArgon2(
       const laneLen = Math.floor(mP / p);
       const segmentLen = Math.floor(laneLen / ARGON2_SYNC_POINTS);
       const perBlock = 256;
-      const memUsed = mP * perBlock;
-      if (!isU32(maxmem) || memUsed > maxmem) throw new Error('mem should be less than 2**32');
-      const B = new Uint32Array(memUsed);
+      // `maxmem` is documented in bytes; compare against the actual 1024-byte block allocation.
+      const memUsed = mP * 1024;
+      if (!isU32(maxmem)) throw new Error('"maxmem" expected <2**32, got ' + maxmem);
+      if (memUsed > maxmem)
+        throw new Error(
+          '"maxmem" limit was hit: memUsed(mP*1024)=' + memUsed + ', maxmem=' + maxmem
+        );
+      const B = new Uint32Array(memUsed / 4);
       for (let l = 0; l < p; l++) {
         const i = perBlock * laneLen * l;
         H0[17] = l;
         H0[16] = 0;
-        B.set(Hp(H0, 1024), i);
+        B.set(u32(Hp(H0, 1024)), i);
         H0[16] = 1;
-        B.set(Hp(H0, 1024), i + perBlock);
+        B.set(u32(Hp(H0, 1024)), i + perBlock);
       }
       clean(BUF, H0);
 
@@ -289,7 +329,7 @@ function mkArgon2(
       const progress = setup({
         total: t * ARGON2_SYNC_POINTS * p * segmentLen - 2 * p,
         stateBytes: currentState.byteLength,
-        save: (state) => {
+        save: (state: TArg<Uint8Array>) => {
           if (!savedInput32) savedInput32 = u32(state);
           savedInput32.set(currentState);
           // We can probably skip this, but this is neccessary to verify save/restore
@@ -299,7 +339,7 @@ function mkArgon2(
           REF_BLOCKS.fill(0);
           INPUT_BLOCKS.fill(0);
         },
-        restore: (state) => {
+        restore: (state: TArg<Uint8Array>) => {
           if (!savedInput32) savedInput32 = u32(state);
           currentState.set(savedInput32);
         },
@@ -310,7 +350,7 @@ function mkArgon2(
         inputBlocksChunks.push(INPUT_BLOCKS.subarray(i * stride, (i + 1) * stride));
       }
 
-      const address_chunks = inputBlocksChunks.map((i: Uint32Array) => i.subarray(0, 256));
+      const address_chunks = inputBlocksChunks.map((i: TArg<Uint32Array>) => i.subarray(0, 256));
 
       for (let chunk = 0; chunk < MAX_PARALLEL; chunk++) {
         address_chunks[chunk][6] = mP;
@@ -446,11 +486,11 @@ function mkArgon2(
       for (let l = 0; l < p; l++)
         for (let j = 0; j < perBlock; j++)
           B_final[j] ^= B[perBlock * (laneLen * l + laneLen - 1) + j];
-      const res = u8(Hp(B_final, dkLen));
+      const res = Hp(B_final, dkLen);
       clean(...address_chunks, B_final, B, INDICES, REF_INDICES, REF_BLOCKS, INPUT_BLOCKS);
       return res;
     },
-    undefined,
+    definition,
     platform
   ) satisfies KDF<ArgonOpts>;
 }
@@ -475,50 +515,68 @@ export const mkArgon2id = /* @__PURE__ */ mkArgon2.bind(
  */
 export type Pbkdf2Opts = KDFOpts & { c: number };
 
-export function pbkdf2(hash: HashInstance<any>) {
-  return mkKDF<Pbkdf2Opts>({ dkLen: 32, maxmem: 1024 }, function* (setup, password, salt, _opts) {
-    const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
-    const { c, dkLen } = opts;
-    anumber(c, 'c');
-    const blocks = Math.ceil(dkLen / hash.outputLen);
-    const progress = setup({ total: (c - 1) * blocks });
-    if (c < 1) throw new Error('iterations (c) must be >= 1');
-    // DK = PBKDF2(PRF, Password, Salt, c, dkLen);
-    const DK = new Uint8Array(dkLen);
-    // U1 = PRF(Password, Salt + INT_32_BE(i))
-    const PRF = hmac.create(hash as any, password);
-    const PRFSalt = PRF._cloneInto().update(salt);
-    let prfW: any; // Working copy
-    const arr = new Uint8Array(4);
-    const view = createView(arr);
-    const u = new Uint8Array(hash.outputLen);
-    // DK = T1 + T2 + ⋯ + Tdklen/hlen
-    for (let ti = 1, pos = 0; pos < dkLen; ti++, pos += hash.outputLen) {
-      // Ti = F(Password, Salt, c, i)
-      const Ti = DK.subarray(pos, pos + hash.outputLen);
-      view.setInt32(0, ti, false);
-      // F(Password, Salt, c, i) = U1 ^ U2 ^ ⋯ ^ Uc
+export function pbkdf2(hash: TArg<HashInstance<any>>) {
+  return mkKDF<Pbkdf2Opts>(
+    { dkLen: 32, maxmem: 1024 },
+    function* (
+      setup: TArg<AsyncSetup>,
+      password: TArg<Uint8Array>,
+      salt: TArg<Uint8Array>,
+      _opts: TArg<Pbkdf2Opts & { dkLen: number; maxmem: number }>
+    ) {
+      const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
+      const { c, dkLen } = opts;
+      anumber(c, 'c');
+      if (c < 1) throw new Error('iterations (c) must be >= 1');
+      // RFC 8018 §5.2 defines dkLen as a positive integer.
+      if (dkLen < 1) throw new Error('"dkLen" must be >= 1');
+      // RFC 8018 §5.2 step 1 requires rejecting oversize dkLen before allocating the destination
+      // buffer or constructing any PRF state, otherwise absurd requests fail with host allocation
+      // errors instead of the PBKDF2 contract error.
+      if (dkLen > (2 ** 32 - 1) * hash.outputLen) throw new Error('derived key too long');
+      const blocks = Math.ceil(dkLen / hash.outputLen);
+      const progress = setup({ total: (c - 1) * blocks });
+      // DK = PBKDF2(PRF, Password, Salt, c, dkLen);
+      const DK = new Uint8Array(dkLen);
       // U1 = PRF(Password, Salt + INT_32_BE(i))
-      (prfW = PRFSalt._cloneInto(prfW)).update(arr).digestInto(u);
-      Ti.set(u.subarray(0, Ti.length));
-      for (let ui = 1; ui < c; ui++) {
-        // Uc = PRF(Password, Uc−1)
-        PRF._cloneInto(prfW).update(u).digestInto(u);
-        for (let i = 0; i < Ti.length; i++) Ti[i] ^= u[i];
-        if (progress()) yield;
+      const PRF = hmac.create(hash as any, password);
+      const PRFSalt = PRF._cloneInto().update(salt);
+      let prfW: any; // Working copy
+      const arr = new Uint8Array(4);
+      const view = createView(arr);
+      const u = new Uint8Array(hash.outputLen);
+      // DK = T1 + T2 + ⋯ + Tdklen/hlen
+      for (let ti = 1, pos = 0; pos < dkLen; ti++, pos += hash.outputLen) {
+        // Ti = F(Password, Salt, c, i)
+        // The last Ti view can be shorter than hLen, which applies
+        // RFC 8018 §5.2 step 4's T_l<0..r-1> truncation without extra copies.
+        const Ti = DK.subarray(pos, pos + hash.outputLen);
+        view.setInt32(0, ti, false);
+        // F(Password, Salt, c, i) = U1 ^ U2 ^ ⋯ ^ Uc
+        // U1 = PRF(Password, Salt + INT_32_BE(i))
+        (prfW = PRFSalt._cloneInto(prfW)).update(arr).digestInto(u);
+        Ti.set(u.subarray(0, Ti.length));
+        for (let ui = 1; ui < c; ui++) {
+          // Uc = PRF(Password, Uc−1)
+          PRF._cloneInto(prfW).update(u).digestInto(u);
+          for (let i = 0; i < Ti.length; i++) Ti[i] ^= u[i];
+          if (progress()) yield;
+        }
       }
+      PRF.destroy();
+      PRFSalt.destroy();
+      if (prfW) prfW.destroy();
+      clean(u);
+      return DK;
     }
-    PRF.destroy();
-    PRFSalt.destroy();
-    if (prfW) prfW.destroy();
-    clean(u);
-    return DK;
-  }) satisfies KDF<Pbkdf2Opts>;
+  ) satisfies KDF<Pbkdf2Opts>;
 }
 
 // Scrypt
 
 // Mem: 3*SCRYPT_BATCH*64 bytes
+// Internal resident-workspace cap in 64-byte chunks; maxP/MAX_BATCH derive from this so large
+// scrypt parallelization factors are processed in chunks without changing RFC-visible output.
 export const SCRYPT_BATCH = /* @__PURE__ */ (() => 10 * 1024)(); // ~2mb
 
 export type ScryptOpts = KDFOpts & {
@@ -528,12 +586,14 @@ export type ScryptOpts = KDFOpts & {
 };
 
 export function mkScrypt(
-  modFn: () => SCRYPT,
-  deps: { sha256: HashInstance<any> },
-  platform: string
+  modFn: TArg<() => SCRYPT>,
+  deps: TArg<{ sha256: HashInstance<any> }>,
+  platform: string,
+  definition?: any
 ) {
   const { sha256 } = deps;
   let mod: SCRYPT;
+  // Instantiate the backend lazily once so importing scrypt surfaces does not build it eagerly.
   const initMod = () => {
     if (mod === undefined) mod = modFn();
   };
@@ -541,7 +601,12 @@ export function mkScrypt(
   return mkKDF<ScryptOpts>(
     // Maxmem - 1GB+1KB by default
     { dkLen: 32, maxmem: 1024 ** 3 + 1024 },
-    function* (setup, password, salt, opts) {
+    function* (
+      setup: TArg<AsyncSetup>,
+      password: TArg<Uint8Array>,
+      salt: TArg<Uint8Array>,
+      opts: TArg<ScryptOpts & { dkLen: number; maxmem: number }>
+    ) {
       initMod();
       const _opts = checkOpts({}, opts);
       const { N, r, p, dkLen, maxmem } = _opts;
@@ -550,7 +615,8 @@ export function mkScrypt(
       anumber(p);
       const blockSize = 128 * r;
       const blockSize32 = blockSize / 4;
-      // Max N is 2^32 (Integrify is 32-bit). Real limit is 2^22: JS engines Uint8Array limit is 4GB in 2024.
+      // Max N is 2^32 because Integrify is 32-bit.
+      // Real limit is 2^22 because JS engines capped Uint8Array near 4 GB in 2024.
       // Spec check `N >= 2^(blockSize / 8)` is not done for compat with popular libs,
       // which used incorrect r: 1, p: 8. Also, the check seems to be a spec error:
       // https://www.rfc-editor.org/errata_search.php?rfc=7914
@@ -558,22 +624,23 @@ export function mkScrypt(
       if (N <= 1 || (N & (N - 1)) !== 0 || N > pow32) {
         throw new Error('Scrypt: N must be larger than 1, a power of 2, and less than 2^32');
       }
-      if (p < 0 || p > ((pow32 - 1) * 32) / blockSize) {
-        throw new Error(
-          'Scrypt: p must be a positive integer less than or equal to ((2^32 - 1) * 32) / (128 * r)'
-        );
+      if (p < 1 || p > ((pow32 - 1) * 32) / blockSize) {
+        throw new Error('"p" expected integer 1..((2^32 - 1) * 32) / (128 * r)');
       }
-      if (dkLen < 0 || dkLen > (pow32 - 1) * 32) {
+      // RFC 7914 §2 defines dkLen as a positive integer.
+      if (dkLen < 1 || dkLen > (pow32 - 1) * 32) {
         throw new Error(
           'Scrypt: dkLen should be positive integer less than or equal to (2^32 - 1) * 32'
         );
       }
       const maxP = Math.min(p, Math.floor(SCRYPT_BATCH / (2 * r)));
       if (maxP < 1) throw new Error('Scrypt: r is too large');
+      // Resident memory tracks only the current lane window; larger `p` values are processed
+      // across later windows and copied back into the global `B` buffer before the final PBKDF2.
       const memUsed = blockSize * (N * maxP);
       if (memUsed > maxmem) {
         throw new Error(
-          'Scrypt: memused is bigger than maxMem. Expected 128 * r * N * p > maxmem of ' + maxmem
+          'Scrypt: "maxmem" limit was hit: memUsed(128*r*N*maxP)=' + memUsed + ', maxmem=' + maxmem
         );
       }
       // [B0...Bp−1] ← PBKDF2HMAC-SHA256(Passphrase, Salt, 1, blockSize*ParallelizationFactor)
@@ -590,13 +657,13 @@ export function mkScrypt(
       const progress = setup({
         total: 2 * N * p,
         stateBytes: curState.byteLength,
-        save: (state) => {
+        save: (state: TArg<Uint8Array>) => {
           if (!savedState32) savedState32 = u32(state);
           savedState32.set(curState);
           mod.segments.output.fill(0);
           mod.segments.xorInput.fill(0);
         },
-        restore: (state) => {
+        restore: (state: TArg<Uint8Array>) => {
           if (!savedState32) savedState32 = u32(state);
           curState.set(savedState32);
         },
@@ -641,7 +708,7 @@ export function mkScrypt(
       clean(B, V, output, x32);
       return res;
     },
-    undefined,
+    definition,
     platform
   ) satisfies KDF<ScryptOpts>;
 }

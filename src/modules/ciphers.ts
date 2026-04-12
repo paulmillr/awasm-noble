@@ -34,10 +34,16 @@ type Shape = symbol | Shape[] | { [k: string]: Shape };
 // Salsa / ChaCha
 // --------------
 
+// Shared Salsa/ChaCha stream block width: ChaCha20 serializes one 16-word state into 64 bytes,
+// and the local Salsa-compatible path keeps the same 512-bit block size for tail/MAC math.
 const BLOCK_LEN = 64;
+// Shared Poly1305/AEAD MAC granularity:
+// RFC 8439 processes data in 16-byte chunks and pads AAD/ciphertext to the
+// next 16-byte boundary before final length words, so macUpdate() rounds by 16.
 const MAC_BLOCK_LEN = 16;
 const ARX_BLOCKS = CHUNKS;
 const MAC_BLOCKS = CHUNKS;
+// Reindex the same backing store from 4-word MAC rows into 16-word ARX blocks for keystream XOR.
 const ARX_MAC_BLOCKS = /* @__PURE__ */ (() => MAC_BLOCKS / 4)();
 type ArxState = StructSpec<{
   counter: ScalarSpec<'u64', unknown>;
@@ -116,6 +122,8 @@ export const chachaCore = (
     qr(2, 7, 8, 13);
     qr(3, 4, 9, 14);
   }
+  // This core runs ChaCha double rounds; current callers only expose even-round variants.
+  // `add=false` reuses the post-round state directly for HChaCha-style derivation.
   for (let i = 0; i < 16; i++) X[i] = add ? T.add(X[i], Y[i]) : Y[i];
 };
 
@@ -144,6 +152,8 @@ export const salsaCore = (
     qr(11, 8, 9, 10);
     qr(12, 13, 14, 15);
   }
+  // This core runs Salsa double rounds; current callers only expose even-round variants.
+  // `add=false` reuses the post-round state directly for HSalsa-style derivation.
   for (let i = 0; i < 16; i++) X[i] = add ? T.add(X[i], Y[i]) : Y[i];
 };
 
@@ -217,6 +227,8 @@ const genArx = (type: TypeName, opts: { rounds: number }, cfg: ArxCfg) => {
       out.set(cfg.derive.outIdx.map((i) => T.fromN('u32', state[i])));
     });
 
+  // Stream ARX modes xor the same keystream in both directions; encrypt/decrypt share
+  // processBlocks and differ only in the caller-side framing around this module.
   return mod;
 };
 
@@ -260,6 +272,7 @@ export const genSalsa = (type: TypeName, opts: { rounds: number }) => {
         );
       },
       core: (f, lanes, state, r) => salsaCore(f, lanes, state, r, false),
+      // HSalsa20 derives the XSalsa20 subkey from words 0, 5, 10, 15 and 6..9 after the rounds.
       outIdx: [0, 5, 10, 15, 6, 7, 8, 9],
     },
   });
@@ -292,11 +305,14 @@ export const genChacha = (type: TypeName, opts: { rounds: number }) => {
         return [...s, ...k, ...n].map((i) => T.fromN('u32', i));
       },
       core: (f, lanes, state, r) => chachaCore(f, lanes, state, r, false),
+      // HChaCha20 derives the XChaCha20 subkey from words 0..3 and 12..15 after the rounds.
       outIdx: [0, 1, 2, 3, 12, 13, 14, 15],
     },
   });
 };
 
+// RFC 8439 §2.8.1 pad16(x): when the last stream block is partial, clear the
+// unused keystream tail so later MAC padding sees zero octets instead of stream bytes.
 const zeroTail = (
   f: MacScope,
   base: Val<'u32'>,
@@ -310,6 +326,8 @@ const zeroTail = (
   });
 };
 
+// RFC 8439 AEAD MACs ciphertext || pad16(ciphertext); secretbox-style callers
+// instead MAC raw ciphertext and keep Poly1305's short-final-block path.
 const macUpdate = (f: MacScope, base: Val<'u32'>, bytes: Val<'u32'>, withLeft: boolean) => {
   const { u32 } = f.types;
   const macBlocks = u32.div(u32.add(bytes, u32.const(15)), u32.const(MAC_BLOCK_LEN));
@@ -369,6 +387,8 @@ export const genSalsaAead = (type: TypeName, opts: { rounds: number }) => {
   ) => {
     const u64T = f.getType('u64', lanes);
     const T = f.getType('u32', lanes);
+    // Salsa keeps its 64-bit block counter in words 8 and 9; laneOffsets()
+    // advances each batched lane to the next counter value before the core runs.
     const cnt64 = u64T.add(u64T.fromN('u64', cnt), u64T.laneOffsets());
     const cnt32 = T.from(u64T.name, cnt64);
     for (let i = 0; i < cnt32.length; i++) cur[8 + i] = cnt32[i];
@@ -385,6 +405,8 @@ export const genSalsaAead = (type: TypeName, opts: { rounds: number }) => {
     const T = f.getType('u32', lanes);
     const s = f.memory.state.sigma.get();
     // See "initial state of salsa" above
+    // HSalsa replaces Salsa20's counter words with the first 16 nonce bytes
+    // before deriveCore() selects words 0,5,10,15,6,7,8,9 as the XSalsa subkey.
     return [s[0], ...k.slice(0, 4), s[1], ...n, s[2], ...k.slice(4, 8), s[3]].map((i) =>
       T.fromN('u32', i)
     );
@@ -433,6 +455,8 @@ export const genSalsaAead = (type: TypeName, opts: { rounds: number }) => {
     })
     .fn('aadBlocks', ['u32', 'u32', 'u32'], 'void', (f, blocks, _isLast, _left) => {
       const { u32 } = f.types;
+      // FIXME: XSalsa20-Poly1305 secretbox has no AAD; this extension MACs zero-padded AAD
+      // without a length block, so trailing-zero AAD values collide.
       f.functions.macBlocksAt.call(u32.const(0), blocks, u32.const(0), u32.const(0));
     })
     .fn('encryptInit', ['u32', 'u32'], 'void', (f, aadLo, aadHi) => {
@@ -461,6 +485,8 @@ export const genSalsaAead = (type: TypeName, opts: { rounds: number }) => {
       f.memory.state.poly.key.as8('u8').set(buffer.range(0, 32).get());
       f.functions.macInit.call();
       f.memory.state.poly.tag.as8('u8').zero();
+      // XSalsa20-Poly1305 keeps block-0 bytes 0..31 as the Poly1305 key, so
+      // ciphertext starts at byte 32 until the first chunk clears `shiftSet`.
       f.memory.state.shiftSet[0].set(u32.const(1));
       f.memory.state.counter.set(u64.const(0));
       f.memory.state.aadLen.set(u64.fromN('u32', [aadLo, aadHi]));
@@ -481,8 +507,9 @@ export const genSalsaAead = (type: TypeName, opts: { rounds: number }) => {
         const k = key.get();
         const n = nonce.get();
         const state = initState(f, lanes, k, n);
-        // Thread-safe: derive counter from (state.counter + batchPos + chunkPos) and do NOT mutate
-        // shared state inside the batchFn. encryptBlocks/decryptBlocks bump state.counter once after.
+        // Thread-safe: derive the counter from (state.counter + batchPos + chunkPos).
+        // Do not mutate shared state inside the batchFn.
+        // encryptBlocks/decryptBlocks bump state.counter once after.
         const base = u64.add(counter.get(), u64.fromN('u32', batchPos));
         f.doN1([base], blocks, (chunkPos, curCnt) => {
           const idx = u32.add(batchPos, chunkPos);
@@ -645,6 +672,8 @@ export const genChachaAead = (type: TypeName, opts: { rounds: number }) => {
       polyKey.set(buffer.range(0, 32).get());
       f.functions.macInit.call();
       tag.zero();
+      // RFC 8439 AEAD uses block 0 only for the Poly1305 one-time key;
+      // payload encryption starts at counter 1.
       f.memory.state.counter.set(u64.const(1));
       f.memory.state.aadLen.set(u64.fromN('u32', [aadLo, aadHi]));
       f.memory.state.dataLen.set(u64.const(0));
@@ -675,6 +704,8 @@ export const genChachaAead = (type: TypeName, opts: { rounds: number }) => {
     })
     .fn('tagFinish', [], 'void', (f) => {
       const { u32 } = f.types;
+      // RFC 8439 §2.8.1 appends LE64(aadLen) || LE64(ciphertextLen) as the
+      // final Poly1305 block after aad/ciphertext padding.
       f.memory.buffer[0].set([
         ...u32.from('u64', f.memory.state.aadLen.get()),
         ...u32.from('u64', f.memory.state.dataLen.get()),
@@ -701,9 +732,13 @@ export const genChachaAead = (type: TypeName, opts: { rounds: number }) => {
 
 type AesDir = 'encrypt' | 'decrypt';
 
+// FIPS 197: AES-128/192/256 all use a fixed 128-bit block size, i.e. 16 bytes.
 export const AES_BLOCK_LEN = 16;
+// Keep the shared ~10MB CHUNKS budget: one 64-byte chunk maps to four 16-byte AES blocks.
 export const AES_BLOCKS = /* @__PURE__ */ (() => CHUNKS * 4)(); // for tree-shaking
+// FIPS 197: Nk is 4/6/8 words for AES-128/192/256, so 8 words covers AES-256.
 export const KEY_LEN_MAX = 8;
+// FIPS 197: Nr is 10/12/14 for AES-128/192/256, so 14 rounds covers AES-256.
 const MAX_ROUNDS = 14;
 // Max expanded AES key size in u32 words: (rounds + 1) * 4, worst-case AES-256 (14 rounds).
 export const EXPANDED_KEY_MAX = /* @__PURE__ */ (() => (MAX_ROUNDS + 1) * 4)();
@@ -712,6 +747,7 @@ export const EXPANDED_KEY_MAX = /* @__PURE__ */ (() => (MAX_ROUNDS + 1) * 4)();
 // mark the builder calls pure so unused cipher modules can drop out.
 const aesTable = /* @__PURE__ */ struct({
   // Byte S-box. For `decrypt`, this holds the inverse S-box.
+  // Stored in 64 u32 lanes so `.as8('u8')` exposes all 256 byte entries.
   sbox: /* @__PURE__ */ array('u32', {}, 64),
   T0: /* @__PURE__ */ array('u32', {}, 256),
   T1: /* @__PURE__ */ array('u32', {}, 256),
@@ -719,6 +755,8 @@ const aesTable = /* @__PURE__ */ struct({
   T3: /* @__PURE__ */ array('u32', {}, 256),
 });
 
+// Shared AES constants: encrypt/decrypt S-box + T-table packs, four u32 lanes
+// for 16 byte-addressable Rcon powers, and a one-word lazy-init guard.
 export const aesConsts = /* @__PURE__ */ struct({
   encrypt: aesTable,
   decrypt: aesTable,
@@ -829,6 +867,8 @@ export const aesInitKeys =
         const roundsState = f.memory.state.rounds;
         const expandedKey = f.memory.state.expandedKey;
         const tmp = f.memory.state.tmp;
+        // FIPS 197 EQINVCIPHER / KEYEXPANSIONEIC: keep the first/last round keys, reverse the
+        // round-key blocks, and apply INVMIXCOLUMNS only to the inner rounds.
         const applyInvMix = (u32: GetOps<'u32'>, x: Val<'u32'>) => {
           const w = applySbox(u32, constants.encrypt.sbox, x, x, x, x);
           const b = new Array<Val<'u32'>>(4);
@@ -915,6 +955,8 @@ export const roundBlocks = <M extends Segs>(
   doCtr: () => void
 ) => {
   const { u32 } = f.types;
+  // SIV-family round 0 is asymmetric: encrypt authenticates plaintext before CTR, while decrypt
+  // runs CTR first so the candidate plaintext can be re-authenticated against the supplied tag/IV.
   if (dir === 'encrypt') {
     f.ifElse(u32.eq(round, u32.const(0)), [], doMac);
     f.ifElse(u32.ne(round, u32.const(0)), [], doCtr);
@@ -935,6 +977,8 @@ const applySbox = (
   s2: Val<'u32'>,
   s3: Val<'u32'>
 ) => {
+  // Caller passes words already permuted for ShiftRows/InvShiftRows; rebuild one state word by
+  // S-boxing byte 0/1/2/3 from successive source words.
   const sb = sbox.as8('u8');
   const b0 = u32.fromN('u8', sb[u32.and(s0, u32.const(0xff))].get());
   const b1 = u32.shl(u32.fromN('u8', sb[u32.and(u32.shr(s1, 8), u32.const(0xff))].get()), 8);
@@ -944,6 +988,8 @@ const applySbox = (
 };
 
 const subWord = (u32: GetOps<'u32'>, sbox: MemU32, n: Val<'u32'>) => {
+  // KEYEXPANSION SUBWORD(): apply the S-box to each byte of one word without the
+  // cross-word byte reshuffle used by applySbox(...) in the final AES round.
   const sb = sbox.as8('u8');
   const b0 = u32.fromN('u8', sb[u32.and(n, u32.const(0xff))].get());
   const b1 = u32.shl(u32.fromN('u8', sb[u32.and(u32.shr(n, 8), u32.const(0xff))].get()), 8);
@@ -971,6 +1017,8 @@ const aesExpandKey = <M extends Segs>(
   const rounds = u32.select(is16, u32.const(10), u32.select(is24, u32.const(12), u32.const(14)));
   const Nkf = u32.mul(u32.add(rounds, u32.const(1)), u32.const(4));
   roundsState.set(rounds);
+  // AES-128/192/256 share one 60-word state buffer; clear the whole schedule so reinit with a
+  // shorter key doesn't leave stale tail words from a previous longer expansion.
   for (let i = 0; i < EXPANDED_KEY_MAX; i++) expandedKey[i].set(u32.const(0));
   f.doN([], Nk, (i: Val<'u32'>) => {
     const off = u32.mul(i, u32.const(4));
@@ -1006,6 +1054,8 @@ const aesExpandKey = <M extends Segs>(
   return [Nk, Nkf];
 };
 
+// Forward SHIFTROWS source-column order by output column c: row r comes from input column
+// (c + r) mod 4, so each lane lists the four source columns for rows 0..3.
 const AES_ORDERS_ENC = [
   [0, 1, 2, 3],
   [1, 2, 3, 0],
@@ -1013,6 +1063,8 @@ const AES_ORDERS_ENC = [
   [3, 0, 1, 2],
 ];
 
+// Inverse SHIFTROWS source-column order by output column c: row r comes from input column
+// (c - r) mod 4, so each lane lists the four source columns for rows 0..3.
 const AES_ORDERS_DEC = [
   [0, 3, 2, 1],
   [1, 0, 3, 2],
@@ -1028,6 +1080,8 @@ export const aesKeyInitEnc = <M extends Segs & { constants: typeof aesConsts }>(
   expandedKey: MemU32,
   rounds: MemU32Scalar
 ) =>
+  // Forward KEYEXPANSION always uses the encrypt S-box plus Rcon powers, even when callers later
+  // derive decrypt-side data from the resulting schedule.
   aesExpandKey(
     f,
     keyLen,
@@ -1055,6 +1109,8 @@ export const aesWithBlock = <M extends Segs & { constants: typeof aesConsts }>(
   const dirc = dir === 'encrypt' ? enc : dec;
   const orders = dir === 'encrypt' ? AES_ORDERS_ENC : AES_ORDERS_DEC;
   const roundFn: RoundFn = (s0, s1, s2, s3) => {
+    // Fused main-round transform: laneRound(...) has already picked the row-shifted source words,
+    // and T0..T3 supply the combined S-box + MixColumns/InvMixColumns contribution for one lane.
     return u32.xor(
       u32.xor(
         dirc.T0[u32.and(s0, u32.const(0xff))].get(),
@@ -1066,13 +1122,19 @@ export const aesWithBlock = <M extends Segs & { constants: typeof aesConsts }>(
       )
     );
   };
+  // Final AES round: laneFinal(...) already applied ShiftRows/InvShiftRows, so only
+  // SBOX/INVSBOX remains here and AddRoundKey happens later in processBlock(...).
   const finalFn: RoundFn = (s0, s1, s2, s3) => applySbox(u32, dirc.sbox, s0, s1, s2, s3);
   const LANES = [0, 1, 2, 3] as const;
   const laneRound = (a: Val<'u32'>[], lane: (typeof LANES)[number]) => {
+    // Pick the four source columns for one output lane after ShiftRows/InvShiftRows,
+    // then hand that row-permuted view to the fused main-round helper.
     const o = orders[lane]!;
     return roundFn(a[o[0]]!, a[o[1]]!, a[o[2]]!, a[o[3]]!);
   };
   const laneFinal = (a: Val<'u32'>[], lane: (typeof LANES)[number]) => {
+    // Same lane selection as laneRound(...), but for the last AES round where the
+    // row-permuted words go through finalFn(...) instead of the T-table round path.
     const o = orders[lane]!;
     return finalFn(a[o[0]]!, a[o[1]]!, a[o[2]]!, a[o[3]]!);
   };
@@ -1080,6 +1142,10 @@ export const aesWithBlock = <M extends Segs & { constants: typeof aesConsts }>(
   // Dynamic rounds: single runtime loop driven by roundsVal.
   // This intentionally avoids compile-time unrolling to measure perf impact.
   const processBlock = (in4: Val<'u32'>[]): Val<'u32'>[] => {
+    // Shared AES block skeleton: initial AddRoundKey, Nr-1 table rounds, then the final
+    // S-box/row-shift round without MixColumns; `dir` selects the forward or inverse tables/order.
+    // `expKey` is pre-arranged for the chosen direction: decryptInit rewrites/reverses the
+    // schedule so the same [0..3], [4*r..], [4*Nr..] indexing works for both block flows.
     const s00 = u32.xor(in4[0]!, expKey[0].get());
     const s01 = u32.xor(in4[1]!, expKey[1].get());
     const s02 = u32.xor(in4[2]!, expKey[2].get());
@@ -1113,6 +1179,8 @@ export const aesInitTables = <M extends Segs & { constants: typeof aesConsts }>(
     // Scratch: use bytes over an output table to avoid allocating a dedicated 256-byte array.
     // Important: use runtime loops (f.doN) for 256*256 to avoid codegen blowups.
     const t = constants.encrypt.T0.as8('u8'); // length 1024 bytes, but we use only [0..255]
+    // Generate the AES S-box, inverse S-box, Rcon powers, and both T-table families at runtime
+    // so all derived constants stay tied to the same field arithmetic and affine-transform logic.
 
     const mul2 = (x: Val<'u32'>) => {
       const hi = u32.and(u32.shr(x, 7), u32.const(1));
@@ -1206,6 +1274,7 @@ export const aesInitTables = <M extends Segs & { constants: typeof aesConsts }>(
   });
 };
 
+// Swap one 32-bit word between local/native word packing and spec-defined big-endian octet order.
 export const bswap32 = (u32: GetOps<'u32'>, x: Val<'u32'>) =>
   u32.or(
     u32.or(u32.shl(u32.and(x, u32.const(0xff)), 24), u32.shl(u32.and(x, u32.const(0xff00)), 8)),
@@ -1227,7 +1296,8 @@ export const bswap32 = (u32: GetOps<'u32'>, x: Val<'u32'>) =>
 export const incCounter = <M extends Segs>(f: Scope<M, {}>, isBE = false) => ({
   inplace: (limbs: Val<'u32'>[], inc: Val<'u32'>): Val<'u32'>[] => {
     const { u32 } = f.types;
-    // Hot-path for GCM-style counters: a single u32 limb.
+    // Hot-path for one-word counters: GCM/GCTR uses a big-endian inc32 word, while
+    // AES-GCM-SIV uses a little-endian low word with the same modulo-2^32 wrap.
     // Keep this straight-line to avoid injecting a `block + brIf` structure into every iteration.
     if (limbs.length === 1) {
       const a0 = limbs[0]!;
@@ -1275,9 +1345,11 @@ export const incCounter = <M extends Segs>(f: Scope<M, {}>, isBE = false) => ({
     limbs: MemorySurface<{ limbs: ArraySpec<ScalarSpec<'u32'>, readonly [number]> }>['limbs'],
     inc: Val<'u32'>
   ) => {
-    // Add a 32-bit value into the counter's byte representation with carry propagation and early-exit.
+    // Add a 32-bit value into the counter's byte representation.
+    // Carry propagation still early-exits when possible.
     //
-    // This is used for the single post-batch state update (threads safe) and also for JS per-block updates.
+    // This is used for the single post-batch state update, which is thread-safe,
+    // and also for JS per-block updates.
     const { u32 } = f.types;
     const b = limbs.as8('u8');
     const n = limbs.length * 4;
@@ -1323,6 +1395,8 @@ export const cmacXor = (
   useK2: Val<'u32'>
 ) =>
   bv.map((x, i) => {
+    // CMAC last-block combiner: optionally xor K1/K2 into the message block first,
+    // then xor the chaining value before the single AES block call.
     const kb = u32.select(useK2, k2[i], k1[i]);
     const withK = u32.xor(x, kb);
     const v = u32.select(useK, withK, x);
@@ -1346,6 +1420,8 @@ export const cmacSubkeysInit = <M extends Segs & { constants: typeof aesConsts }
   aesInitTables(f);
   aesKeyInitEnc(f, len, st.key, st.tmp, st.expandedKey, st.rounds);
   aesWithBlock(f, 'encrypt', st.rounds.get(), st.expandedKey, (processBlock) => {
+    // Reuse k1 as the RFC 4493 `L = AES_K(0^128)` scratch, then clone the derived K1
+    // into k2 so the second doubling step can produce K2 without another AES block call.
     st.k1.set(processBlock([u32.const(0), u32.const(0), u32.const(0), u32.const(0)]));
   });
   cmacDbl(f, st.k1);
@@ -1436,6 +1512,8 @@ export const genCmac = (_type: TypeName, _opts: {}) =>
           aesWithBlock(f, 'encrypt', roundsVal, expKey, (processBlock) => {
             const ivVal = f.doN1(iv.get(), blocks, (chunkPos: Val<'u32'>, ...ivv: Val<'u32'>[]) => {
               const isFinal = u32.and(isLast, u32.eq(chunkPos, lastIdx));
+              // Empty-input CMAC still uses K2: `padBlocks != 0` marks the synthetic padded block
+              // even when `left == 0`, matching RFC 4493's `n := 1; flag := false` path.
               const hasLeft = u32.or(u32.ne(left, u32.const(0)), u32.ne(padBlocks, u32.const(0)));
               const useK2 = u32.and(isFinal, hasLeft);
               const useK = isFinal;
@@ -1475,8 +1553,9 @@ export const genCmac = (_type: TypeName, _opts: {}) =>
 //   `batchLen=ceil(blocks/perBatch)`, `perBatch=MIN_PER_THREAD`
 // - Otherwise (js/wasm without threads), call sequentially:
 //   `batchLen=1`, `perBatch=blocks`
-// - Kernels must compute `base=batchPos*perBatch` and clamp `iters=min(perBatch, blocks-base)` so there is a
-//   single call site (no trailing calls/branches that duplicate AES call sites).
+// - Kernels must compute `base=batchPos*perBatch` and clamp
+//   `iters=min(perBatch, blocks-base)` so there is a single call site
+//   without trailing calls/branches that duplicate AES call sites.
 export const callBatch = <M extends Segs, F extends FnRegistry>(
   f: Scope<M, F>,
   blocks: Val<'u32'>,
@@ -1824,8 +1903,9 @@ export const genAesGcm = (_type: TypeName, _opts: {}) => {
       'void',
       (f, len, nonceLen, _nonceBitsLo, _nonceBitsHi, aadLo, aadHi) => {
         const { u32, u64 } = f.types;
-        // reset() clears module state between public operations, so a key-hash cache here never survives long
-        // enough to hit. Keep init direct and exact instead of carrying unreachable cache machinery.
+        // reset() clears module state between public operations, so a key-hash
+        // cache here never survives long enough to hit.
+        // Keep init direct and exact instead of carrying unreachable cache machinery.
         aesInitTables(f);
         aesKeyInitEnc(
           f,
@@ -1984,6 +2064,9 @@ export const genAesGcmSiv = (_type: TypeName, _opts: {}) => {
       const expKey = f.memory.state.expandedKey;
 
       aesWithBlock(f, 'encrypt', roundsVal, expKey, (processBlock) => {
+        // RFC 8452 §4 derives the per-nonce auth key first and then the CTR key
+        // from consecutive little-endian counters, keeping only the first 8 bytes
+        // of each AES block.
         const auth = f.memory.state.ghash.h;
         for (let i = 0; i < KEY_LEN_MAX; i++) encKey[i].set(u32.const(0));
         for (let i = 0; i < 2; i++) {
@@ -2171,6 +2254,8 @@ const sivBlocks = <M extends Segs & { buffer: ArraySpec<ScalarSpec<'u32'>> }>(
 ) => {
   const { u32 } = f.types;
   const buffer8 = f.memory.buffer.as8('u8');
+  // RFC 5297 §2.4 routes an empty final S2V string through `pad(Sn)`, so normalize
+  // it to one synthetic 0x80 || 0^... block and let callers reuse the same last-block path.
   const isEmpty = u32.and(isLast, u32.eq(blocks, u32.const(0)));
   const bcount = u32.select(isEmpty, u32.const(1), blocks);
   const l = u32.select(isEmpty, u32.const(AES_BLOCK_LEN), left);
@@ -2385,6 +2470,8 @@ export const genAesSiv = (_type: TypeName, _opts: {}) => {
         f.memory.state.ctrReady.set(u32.const(1));
         ctr.set(f.memory.state.tag.get());
         const ctr8 = ctr.as8('u8');
+        // RFC 5297 §2.6 / §2.7 uses Q = V bitand (1^64 || 0^1 || 1^31 || 0^1 || 1^31),
+        // which clears the high bit of bytes 8 and 12 in this byte layout before CTR.
         ctr8[8].set(u32.castTo('u8', u32.and(u32.fromN('u8', ctr8[8].get()), u32.const(0x7f))));
         ctr8[12].set(u32.castTo('u8', u32.and(u32.fromN('u8', ctr8[12].get()), u32.const(0x7f))));
       });

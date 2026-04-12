@@ -30,6 +30,7 @@ export function genScrypt(_type: TypeName, _opts = {}) {
         const mem = f.memory.output.reshape(u32.add(blocks, u32.const(1)), p, perBlock, 16);
         const xorInput = f.memory.xorInput.reshape(p, perBlock, 16);
 
+        // RFC 7914 §5 step 3: phase 2 applies BlockMix to X xor V[j], not to X directly.
         f.ifElse(needXor, [], () => {
           for (let l = 0; l < lanes; l++) {
             f.doN([], u32.mul(r, u32.const(2)), (i) => {
@@ -151,8 +152,9 @@ export function genArgon2(_type: TypeName, _opts: {}) {
           const outBlock = INPUT_BLOCKS.lanes(lanes)[batchPos][refPos];
           const colIdx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
           const rowIdx = [0, 1, 16, 17, 32, 33, 48, 49, 64, 65, 80, 81, 96, 97, 112, 113];
-          // columns (8), then rows (8)
-          // Full unroll: 0.5mb, slighgtly faster (~10-15%)
+          // RFC 9106 §3.5 applies P rowwise then columnwise; rc=0 transposes rows into
+          // scratchpad so rc=1 can read columns contiguously.
+          // Full unroll: 0.5mb, slightly faster (~10-15%)
           f.doN([], 2, (rc) => {
             const inputIdx = u32.select(u32.eqz(rc), refPos, u32.const(3));
             const outputIdx = u32.select(u32.eqz(rc), u32.const(3), refPos);
@@ -164,12 +166,12 @@ export function genArgon2(_type: TypeName, _opts: {}) {
               f.ifElse(
                 u32.eqz(rc),
                 [],
-                // rc=0: columns -> scratchpad
+                // rc=0: rows -> scratchpad
                 () =>
                   writeIdx.forEach((i, j) =>
                     REF_BLOCKS[outputIdx].lanes(lanes)[batchPos][i].set(state[j])
                   ),
-                // rc=1: rows -> outBlock
+                // rc=1: columns -> outBlock
                 () => writeIdx.forEach((i, j) => outBlock[i].mut.xor(state[j]))
               );
             });
@@ -218,7 +220,8 @@ export function genArgon2(_type: TypeName, _opts: {}) {
           u32.eq(type, u32.const(1)),
           u32.and(u32.eq(type, u32.const(2)), u32.and(u32.eqz(r), u32.lt(s, u32.const(2))))
         );
-        const area1 = u32.select(u32.eqz(r), u32.mul(s, segmentLen), u32.sub(laneLen, segmentLen)); // r==0 ? s*segmentLen : laneLen-segmentLen
+        // r == 0 ? s * segmentLen : laneLen - segmentLen
+        const area1 = u32.select(u32.eqz(r), u32.mul(s, segmentLen), u32.sub(laneLen, segmentLen));
         const isStart = u32.and(u32.eqz(r), u32.eqz(s));
         const startPos = u32.select(
           //r !== 0 && s !== ARGON2_SYNC_POINTS - 1

@@ -22,6 +22,7 @@ import { CHUNKS, getLanes, MIN_PER_THREAD, readMSG } from './utils.ts';
 // CMAC is a "mac-like" module, but implemented alongside AES primitives.
 // export { genCmac } from './ciphers.ts';
 
+// 8-bit GHASH table windows: each NIST SP 800-38D 128-bit block becomes 16 table lookups.
 export const GHASH_U64X2_W = 8;
 export const GHASH_U64X2_TABLE_ENTRIES = /* @__PURE__ */ (() =>
   (1 << GHASH_U64X2_W) * (128 / GHASH_U64X2_W))();
@@ -53,6 +54,8 @@ export const ghashInitTableCore64v = <M extends Segs, F extends FnRegistry>(
   const { u32, u64, u64x2, i32 } = f.types;
   // GHASH reduction constant, aligned to the top byte for the right-shift step.
   const cPoly = u64.shl(u64.const(0b1110_0001), i32.const(56));
+  // NIST SP 800-38D §6.3:
+  // advance V with a 128-bit right shift and xor R when the dropped low bit is 1.
   const mul2 = (k0: Val<'u64'>, k1: Val<'u64'>) => {
     const hi = u64.and(k1, u64.const(1));
     const nk1 = u64.or(u64.shl(k0, i32.const(63)), u64.shr(k1, i32.const(1)));
@@ -80,6 +83,8 @@ export const ghashInitTableCore64v = <M extends Segs, F extends FnRegistry>(
         return [u64x2.xor(o, u64x2.and(tmp[j].get(), u64x2.splat(mask)))];
       });
       if (mode === 'polyval') {
+        // RFC 8452 Appendix A: POLYVAL reuses GHASH via ByteReverse.
+        // Reverse table entries back to POLYVAL order here.
         const a0 = u64x2.extractLane(o, 0);
         const a1 = u64x2.extractLane(o, 1);
         return (entry.set(mkVec(bswap64(u64, u32, a1), bswap64(u64, u32, a0))), []);
@@ -104,6 +109,8 @@ export const ghashBlocksTableCore64v = <M extends Segs, F extends FnRegistry>(
     let o = u64x2.const(0);
     const x0 = u64x2.extractLane(x, 0);
     const x1 = u64x2.extractLane(x, 1);
+    // RFC 8452 Appendix A: POLYVAL multiplies ByteReverse(X_i).
+    // Reverse lanes and bytes within each lane here.
     const xs = reverse ? [x1, x0] : [x0, x1];
     let w = u32.const(0);
     for (let wi = 0; wi < xs.length; wi++) {
@@ -122,6 +129,8 @@ export const ghashBlocksTableCore64v = <M extends Segs, F extends FnRegistry>(
     }
     return o;
   };
+  // NIST SP 800-38D §6.4 / RFC 8452 §3:
+  // fold each block by xoring it into the accumulator before the field multiply.
   const yv = f.doN([y.get()], blocks, (chunkPos, s0) => [
     mulTable(u64x2.xor(s0, readMSG(f, buffer[chunkPos], clear)), mode === 'polyval'),
   ]);
@@ -137,6 +146,7 @@ const resetBatch = <M extends GhashBatchSegs | PolyBatchSegs, F extends FnRegist
 ) => {
   const { u32 } = f.types;
   const perBlock = u32.div(blockLen, u32.const(4));
+  // Reset clears key material and tables; hash init writes the caller key before each new run.
   f.memory.state.range(pos, len).as8().zero();
   const buffer = f.memory.buffer.reshape(pos, max, perBlock);
   f.doN(
@@ -146,6 +156,7 @@ const resetBatch = <M extends GhashBatchSegs | PolyBatchSegs, F extends FnRegist
   );
 };
 const ghashBatchState = /* @__PURE__ */ struct({
+  // Generic hash-state slot; GHASH/POLYVAL use ghash.y64 as the live accumulator.
   state: /* @__PURE__ */ array('u32', {}, 4),
   ghash: /* @__PURE__ */ ghashState(),
   table64v: /* @__PURE__ */ array('u64x2', {}, GHASH_U64X2_TABLE_ENTRIES),
@@ -164,9 +175,11 @@ const ghashMod = (name: string) =>
         const { u32 } = f.types;
         const perBlock = u32.div(blockLen, u32.const(4));
         const buffer = f.memory.buffer.reshape(batchPos, maxBlocks, perBlock)[batchPos].as8();
+        // Raw GHASH/POLYVAL zero-pad the final partial block.
         f.ifElse(u32.ne(left, u32.const(0)), [], () =>
           f.doN([], left, (i) => (buffer[u32.add(take, i)].set(u32.const(0)), []))
         );
+        // Empty input reports a dummy pad block so the block processor absorbs nothing.
         return u32.select(u32.eq(take, u32.const(0)), u32.const(1), u32.const(0));
       }
     );
@@ -181,7 +194,9 @@ const ghashOutBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
   f.doN([], u32.const(lanes), (i: Val<'u32'>) => {
     const p = u32.add(pos, i);
     const buffer = f.memory.buffer.reshape(p, max, 4)[p].as('u64x2').reshape(max);
+    // ghash.y64 already holds GHASH Y_m or POLYVAL S_s in output byte order.
     const out = f.memory.state[p].ghash.y64.get();
+    // Fixed-output wrapper exposes at most one block; loop keeps the generic output interface.
     return (f.doN([], b, (chunkPos: Val<'u32'>) => (buffer[chunkPos].set(out), [])), []);
   });
 };
@@ -195,6 +210,7 @@ const ghashProcessBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
   mode: 'ghash' | 'polyval'
 ) => {
   const { u32 } = f.types;
+  // Raw GHASH/POLYVAL uses pad=1 only for an empty final tail; skip that dummy block.
   const run = u32.sub(b, pad);
   f.doN([], u32.const(lanes), (i: Val<'u32'>) => {
     const p = u32.add(pos, i);
@@ -210,6 +226,7 @@ const ghashInitBatch = <M extends GhashBatchSegs, F extends FnRegistry>(
   mode: 'ghash' | 'polyval'
 ) => {
   const { u32, u64x2 } = f.types;
+  // NIST SP 800-38D §6.4 / RFC 8452 §3: reset the accumulator before table init.
   f.memory.state[pos].ghash.y.set([u32.const(0), u32.const(0), u32.const(0), u32.const(0)]);
   f.memory.state[pos].ghash.y64.set(u64x2.const(0));
   f.memory.state[pos].state.set([u32.const(0), u32.const(0), u32.const(0), u32.const(0)]);
@@ -236,6 +253,7 @@ export const genPolyval = (type: TypeName, { reverse: _reverse }: { reverse: tru
   ghashMod('polyval')
     .fn('macInit', ['u32'], 'void', (f, batchPos) => {
       const { u32 } = f.types;
+      // RFC 8452 Appendix A: convert POLYVAL H to mulX_GHASH(ByteReverse(H)) in module-owned state.
       const k = f.memory.state[batchPos].ghash.h.as8();
       f.doN([], u32.const(8), (i) => {
         const j = u32.sub(u32.const(15), i);
@@ -268,15 +286,18 @@ type U64View = ArrayLike<{ get: () => Val<'u64'>; set: (v: Val<'u64'>) => void }
   as: (type: 'u32') => ArrayLike<{ get: () => Val<'u32'>; set: (v: Val<'u32'>) => void }>;
 };
 type U32Arr = ArrayLike<Val<'u32'>>;
+// RFC 8439 §2.5: Poly1305 is modulo 2^130-5; split 130 bits into 5x26 or 10x13 limbs.
 const WIDE_LIMB_COUNT = 5;
 type LimbSpec = { bits: number; mask: number; count: number; hibit: number };
 const makeSpec = (bits: number, count: number) => {
   const base = 1 << bits;
+  // RFC 8439 §2.5: full 16-byte blocks append 2^128, stored as a top-limb bit offset.
   return { bits, mask: base - 1, count, hibit: 128 % bits };
 };
 const parseWithSpec = (u32: GetOps<'u32'>, W: Val<'u32'>[], hibit: Val<'u32'>, spec: LimbSpec) => {
   const mask = u32.const(spec.mask);
   const parts = new Array<Val<'u32', unknown>>(spec.count);
+  // RFC 8439 §2.5.1 uses little-endian numbers; slice the 128-bit words into local limbs.
   for (let i = 0; i < spec.count; i++) {
     const bit = i * spec.bits;
     const lo = Math.floor(bit / 32);
@@ -302,6 +323,7 @@ type MulOps<T> = {
   toU32: (a: T) => Val<'u32'>;
   fromU32: (a: Val<'u32'>) => T;
 };
+// RFC 8439 §2.5 multiply/reduce loop is shared across u32/u64 limb backends.
 const makeMulOps = <T>(
   ops:
     | Pick<GetOps<'u32'>, 'add' | 'mul' | 'shr' | 'and' | 'const'>
@@ -338,8 +360,10 @@ const mulReduce = <T>(
     let sum1 = ops.const(0);
     for (let j = 0; j < spec.count; j++) {
       const idx = i - j;
+      // RFC 8439 §2.5: since p=2^130-5, high limbs fold back as r*5.
       const mul = idx >= 0 ? r[idx] : r5[idx + spec.count];
       const add = ops.mul(ops.fromU32(h[j]), ops.fromU32(mul));
+      // Narrow u32 limbs split accumulation before carries so five products stay under 2^32.
       if (j < (spec.count === LIMB_SPEC.count ? WIDE_LIMB_COUNT : spec.count))
         sum0 = ops.add(sum0, add);
       else sum1 = ops.add(sum1, add);
@@ -362,6 +386,7 @@ const mulReduce = <T>(
 const getU32Arr = (arr: U64View, len: number) => {
   const out = new Array<Val<'u32'>>(len);
   const view = arr.as('u32') as unknown as ArrayLike<{ get: () => Val<'u32'> }>;
+  // Poly1305 limbs live in the low u32 half of each u64 slot; the high half is padding here.
   for (let i = 0; i < len; i++) out[i] = view[i * 2].get();
   return out;
 };
@@ -370,6 +395,8 @@ const setU32Arr = (u32: GetOps<'u32'>, arr: U64View, vals: U32Arr, len: number, 
   for (let i = 0; i < len; i++) {
     const lo = i * 2;
     view[lo].set(vals[i]);
+    // Key/pad writes clear padding.
+    // Accumulator updates may skip because readers only load low halves.
     if (clearHi) view[lo + 1].set(u32.const(0));
   }
 };
@@ -399,7 +426,8 @@ const polyFinish = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
   for (let i = 0; i < spec.count; i++) {
     const v = u32.add(H[i], i === 0 ? c5 : c);
     c = u32.shr(v, spec.bits);
-    // Keep the top limb unmasked so the final subtract can detect carry-out (fixes p-reduction edge cases).
+    // Keep the top limb unmasked so the final subtract can detect carry-out.
+    // This fixes p-reduction edge cases.
     G[i] = i === spec.count - 1 ? v : u32.and(v, limbMask);
   }
   G[spec.count - 1] = u32.sub(G[spec.count - 1], u32.shl(u32.const(1), spec.bits));
@@ -408,6 +436,7 @@ const polyFinish = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
   for (let i = 0; i < spec.count; i++) H[i] = u32.or(u32.and(H[i], nm), u32.and(G[i], m));
   const P = getU32Arr(poly.pad, 4);
   let carry = u64.const(0);
+  // RFC 8439 §2.5: add s word-by-word and keep only the low 128-bit tag.
   for (let i = 0; i < 4; i++) {
     let h32 = u32.const(0);
     const wordStart = i * 32;
@@ -440,6 +469,7 @@ const polyBlocksMul = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry,
   f.ifElse(u32.ne(b, u32.const(0)), [], () => {
     let H = getU32Arr(poly.h, spec.count);
     [H] = f.doN1([H], b, (chunkPos: Val<'u32'>, H: Val<'u32', unknown>[]) => {
+      // RFC 8439 §2.5: short final blocks already carry the byte-aligned 0x01 from padding.
       const hibit = u32.select(
         u32.and(last, u32.and(u32.eq(u32.add(chunkPos, u32.const(1)), b), u32.ne(l, u32.const(0)))),
         u32.const(0),
@@ -494,6 +524,7 @@ const polyBlocksMul4 = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
         const a = new Array<Val<'u32'>>(spec.count);
         for (let i = 0; i < spec.count; i++) a[i] = u32.add(H[i], m[0][i]);
         const d = new Array<Val<'u64'>[]>(4);
+        // Four full-block updates fold to (H+m0)r^4 + m1r^3 + m2r^2 + m3r.
         for (let i = 0; i < 4; i++) {
           const [h, r, r5] = [i === 0 ? a : m[i], mul4.rList[i], mul4.r5List[i]];
           const hU = new Array<Val<'u64'>>(spec.count);
@@ -599,6 +630,7 @@ const polyInit = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
 ) => {
   const { u32, u64 } = f.types;
   const key = poly.key.as8('u8');
+  // RFC 8439 §2.5.1 parses Poly1305 key halves as little-endian numbers.
   const u8to32 = (i: number) => {
     const b0 = u32.fromN('u8', key[i].get());
     const b1 = u32.fromN('u8', key[i + 1].get());
@@ -611,7 +643,7 @@ const polyInit = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
   const spec = getSpec(!!f.flags.native64bit);
   const rBytes = new Array<Val<'u32', unknown>>(16);
   for (let i = 0; i < 16; i++) rBytes[i] = u32.fromN('u8', key[i].get());
-  // Poly1305 clamp from RFC 8439.
+  // RFC 8439 §2.5.1: clamp r &= 0x0ffffffc0ffffffc0ffffffc0fffffff.
   for (const i of [3, 7, 11, 15] as const) rBytes[i] = u32.and(rBytes[i], u32.const(0x0f));
   for (const i of [4, 8, 12] as const) rBytes[i] = u32.and(rBytes[i], u32.const(0xfc));
   const w = new Array<Val<'u32', unknown>>(4);
@@ -629,6 +661,7 @@ const polyInit = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
     const u64ops = makeU64Ops(u64);
     const pow = [rArr];
     for (let i = 1; i < 4; i++) pow[i] = mulReduce(u64ops, WIDE_LIMB_SPEC, pow[i - 1], rArr, r5Arr);
+    // polyBlocksMul4 consumes [r^4, r^3, r^2, r] to fold four RFC 8439 block updates.
     for (let i = 0; i < WIDE_LIMB_COUNT; i++) {
       for (let j = 0; j < 4; j++) poly.r[3 - j][i].set(u64.fromN('u32', pow[j][i]));
       for (let j = 0; j < 4; j++) poly.r5[3 - j][i].set(u64.fromN('u32', u32.mul(pow[j][i], c5)));
@@ -656,9 +689,11 @@ const polyPadAt = <M extends Segs & BufSegs, F extends FnRegistry>(
 ) => {
   const { u32 } = f.types;
   const buffer = f.memory.buffer.as8();
+  // RFC 8439 §2.5: short final Poly1305 blocks append 0x01, then zero-fill to 16 bytes.
   f.ifElse(u32.ne(left, u32.const(0)), [], () => {
     const off = u32.add(base, take);
     buffer[off].set(u32.const(1));
+    // Keep the fixed loop value-preserving after the RFC 8439 zero-fill span.
     for (let i = 1; i < 16; i++) {
       const idx = u32.add(off, u32.const(i));
       buffer[idx].set(u32.select(u32.lt(u32.const(i), left), u32.const(0), buffer[idx].get()));
@@ -666,24 +701,34 @@ const polyPadAt = <M extends Segs & BufSegs, F extends FnRegistry>(
   });
 };
 export const poly1305Ops =
+  // AEAD callers pass false because ciphertext must remain in buffer after MAC reads it.
   (clearBuffer = true) =>
-  <M extends Segs & PolySegs, F extends FnRegistry>(mod: Module<M, F>) =>
-    mod
-      .fn('macInit', [], 'void', (f) => polyInit(f, f.memory.state.poly))
-      .fn('macPadAt', ['u32', 'u32', 'u32'], 'void', polyPadAt)
-      .fn('macBlocksAt', ['u32', 'u32', 'u32', 'u32'], 'void', (f, base, blocks, isLast, left) => {
-        const { u32 } = f.types;
-        const buffer = f.memory.buffer.reshape(CHUNKS, 4);
-        const readBlock = (chunkPos: Val<'u32'>) =>
-          readMSG(f, buffer[u32.add(u32.shr(base, 4), chunkPos)], clearBuffer);
-        polyBlocksDual(f, f.memory.state.poly, blocks, isLast, left, readBlock);
-      })
-      .fn(
-        'macFinish', // called without args by AEAD modules; keep signature empty to avoid awasm arg mismatch
-        [],
-        'void',
-        (f) => polyFinish(f, f.memory.state.poly, getSpec(!!f.flags.native64bit))
-      );
+    <M extends Segs & PolySegs, F extends FnRegistry>(mod: Module<M, F>) =>
+      mod
+        .fn('macInit', [], 'void', (f) => polyInit(f, f.memory.state.poly))
+        .fn('macPadAt', ['u32', 'u32', 'u32'], 'void', polyPadAt)
+        .fn(
+          'macBlocksAt',
+          ['u32', 'u32', 'u32', 'u32'],
+          'void',
+          (f, base, blocks, isLast, left) => {
+            const { u32 } = f.types;
+            const buffer = f.memory.buffer.reshape(CHUNKS, 4);
+            // base is a byte offset; each Poly1305 row is 16 bytes / 4 u32 words.
+            const readBlock = (chunkPos: Val<'u32'>) =>
+              readMSG(f, buffer[u32.add(u32.shr(base, 4), chunkPos)], clearBuffer);
+            polyBlocksDual(f, f.memory.state.poly, blocks, isLast, left, readBlock);
+          }
+        )
+        .fn(
+          // Called without args by AEAD modules.
+          // Keep the signature empty to avoid awasm arg mismatch.
+          'macFinish',
+          [],
+          'void',
+          (f) => polyFinish(f, f.memory.state.poly, getSpec(!!f.flags.native64bit))
+        );
+// RFC 8439 §2.5 Poly1305 state: key, r powers, accumulator, s pad, and tag.
 const polyState = /* @__PURE__ */ struct({
   key: /* @__PURE__ */ array('u64', {}, 4),
   r: /* @__PURE__ */ array('u64', {}, 4, 10),
@@ -693,9 +738,11 @@ const polyState = /* @__PURE__ */ struct({
   tag: /* @__PURE__ */ array('u32', {}, 4),
 });
 const polyBatchState = /* @__PURE__ */ struct({
+  // Generic batch scratch/reset slot; Poly1305 arithmetic state lives in the poly field.
   state: /* @__PURE__ */ array('u32', {}, 10),
   poly: polyState,
 });
+// Raw Poly1305 module; AEAD callers build RFC 8439 §2.8.1 zero-padded MAC input separately.
 export const genPoly1305 = (type: TypeName, _opts: {}) =>
   new Module('poly1305')
     .batchMem('state', polyBatchState)

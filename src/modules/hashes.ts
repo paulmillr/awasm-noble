@@ -23,7 +23,7 @@ import {
   type UnsignedType,
 } from '@awasm/compiler/types.js';
 import * as constants from '../constants.ts';
-import { CHUNKS, getLanes, MIN_PER_THREAD, readMSG } from './utils.ts';
+import { CHUNKS, getLanes, MIN_PER_THREAD, readMSG, type TArg } from './utils.ts';
 
 // Generic Chi and Maj functions
 function Chi<V extends Val<UnsignedType, G>, G = unknown>(
@@ -102,7 +102,8 @@ function padCounter<T extends UnsignedType>(
           const buffer = f.memory.buffer.reshape(batchPos, maxBlocks, perInput)[batchPos];
           buffer.as8().range(take, blockLen).fill(0, u32.add(left, blockLen));
           // input[msgLen] ^= 0x80 (either last of current block or next block)
-          // NOTE: suffix is const here, only sha3 and blake1 have different suffix. For blake1 suffix is lengthFlag!
+          // NOTE: suffix is const here; only sha3 and blake1 differ.
+          // For blake1 the suffix is lengthFlag.
           buffer.as8()[take].mut.xor(u32.const(0x80));
           const fits = u32.ge(left, u32.const(counterLen + 1)); // 1 is suffix here
           const paddingBlocks = u32.select(fits, u32.const(0), u32.const(1)); // fits ? 0 : 1
@@ -238,7 +239,7 @@ export function genSha2<T extends UnsignedType>(
             // SHA256_W[i] = (s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16]) | 0;
             W[i] = T.add(s1, W[i - 7], s0, W[i - 16]);
           }
-          // Compression function main loop, 64 rounds
+          // Compression function main loop: 64 rounds for SHA-224/256, 80 for SHA-384/512.
           for (let i = 0; i < rounds; i++) {
             // const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
             const sigma1 = T.xor(T.rotr(E, SH[6]), T.rotr(E, SH[7]), T.rotr(E, SH[8]));
@@ -291,6 +292,8 @@ function keccakFn<T extends UnsignedType>(
         S[y + x] = T.xor(S[y + x], i0, i1);
       }
     }
+    // FIPS 202 applies rho then pi; this loop fuses them by walking the 24 non-(0,0) lanes
+    // in pi order. Current callers use KECCAK-p[1600,24], so rc[r] already matches ir = 0..23.
     let last = S[1];
     for (let x = 0; x < 24; x++) {
       B[0] = S[constants.SHA3_PI2[x]];
@@ -324,6 +327,8 @@ function keccakBlockLenCb<T>(
   // doesn't matter what we do during the start. Possible blockLens
   // in u32: 72, 104, 136, 144, 168
   // in u64: 9, 13, 17, 18, 21
+  // FIPS 202's Keccak[1600] users here only expose rates 72/104/136/144/168 bytes,
+  // so this callback ladder touches exactly the first 9/13/17/18/21 u64 lanes.
   return f.block(S, (...S) => {
     for (let i = 0; i < 9; i++) cb(S, i);
     f.brIf(0, u32.eq(blockLen, u32.const(72)), ...S);
@@ -399,7 +404,9 @@ export function genKeccak<T extends UnsignedType>(type: T, opts: { rounds: numbe
           });
           // Slower:
           // f.doN1([], items, (pos) => {
-          //   T.set('state', pos, T.xor(T.get('state', pos), T.get('input', u32.add(inputPos, pos))));
+          //   T.set(
+          //     'state', pos, T.xor(T.get('state', pos), T.get('input', u32.add(inputPos, pos)))
+          //   );
           //   return [];
           // });
           [S] = keccakFn(f, type, S, rounds, lanes);
@@ -416,6 +423,8 @@ export function genKeccak<T extends UnsignedType>(type: T, opts: { rounds: numbe
         const { u32 } = f.types;
         const items = u32.div(blockLen, u32.const(8)); // how many u64 items in block?
         const buffer = f.memory.buffer.reshape(batchPos, maxBlocks, items)[batchPos];
+        // FIPS 202 Keccak[c] uses pad10*1 after the domain suffix only; unlike the
+        // SHA/MD/Blake1 builders, there is no encoded message-length word in the final block here.
         buffer.as8().range(take, blockLen).fill(0, u32.add(left, blockLen)); // left + blockLen?
         // input[msgLen] ^= 0x80 (either last of current block or next block)
         // NOTE: suffix is const here, only sha3 and blake1 have different suffix.
@@ -547,7 +556,8 @@ export function genRipemd<T extends UnsignedType>(type: T, _opts: undefined) {
             }
           }
           cnt = u64.add(cnt, blockLen64);
-          // Add the compressed chunk to the current hash value
+          // RIPEMD-160 recombines the left and right lines with this fixed word permutation,
+          // not by adding the two lanes back in place.
           return [
             cnt,
             [
@@ -608,6 +618,8 @@ export function genMd5<T extends UnsignedType>(type: T, _opts: undefined) {
               g = i;
               s = [7, 12, 17, 22];
             } else if (i < 32) {
+              // MD5 round 2 `G(X,Y,Z) = XZ v Y not(Z)` is the same choice primitive
+              // as round 1 after rotating the arguments to `(D, B, C)`.
               F = Chi(T, D, B, C);
               g = (5 * i + 1) % 16;
               s = [5, 9, 14, 20];
@@ -641,7 +653,7 @@ function blakeFn<N extends UnsignedType, G = unknown>(
   T: GetOps<N, G> & OpsFnForType<UnsignedType, Val<N, G>, Shift, Val<MaskType<N>, G>>,
   rounds: number,
   shifts: number[],
-  sigma: Uint8Array,
+  sigma: TArg<Uint8Array>,
   V: Val<N, G>[],
   MSG: Val<N, G>[],
   TBL?: Val<N, G>[]
@@ -650,6 +662,8 @@ function blakeFn<N extends UnsignedType, G = unknown>(
     let x = MSG[sigma[x0N]];
     // blake1 only, but we cannot do this before this function, since same indice in sigma will
     // happen multiple times (we cannot prexor MSG with TBL)
+    // Blake1 precomputes the companion constants in flattened G1/G2 order, so `TBL` stays
+    // indexed by the call position (`x0N` / `x1N`) rather than by the permuted message word.
     if (TBL) x = T.xor(x, TBL[x0N]);
     let x2 = MSG[sigma[x1N]];
     if (TBL) x2 = T.xor(x2, TBL[x1N]);
@@ -668,6 +682,8 @@ function blakeFn<N extends UnsignedType, G = unknown>(
     b = T.rotr(T.xor(b, c), shifts[3]);
     ((V[aN] = a), (V[bN] = b), (V[cN] = c), (V[dN] = d));
   }
+  // `sigma` is flattened as 16 consecutive word indices per round, so `j` walks one round in
+  // spec order: four column G calls followed by four diagonal G calls.
   for (let i = 0, j = 0; i < rounds; i++) {
     // columns
     G(0, 4, 8, 12, j++, j++);
@@ -745,6 +761,9 @@ export function genBlake1<T extends UnsignedType>(
           const MSG = readMSG(f, buffer[chunkPos]);
 
           for (let i = 0; i < 8; i++) V[8 + i] = T.const(ccc[i]);
+          // SHA-3 proposal BLAKE v1.2 §2.1.3 / §2.2.3:
+          // if the final emitted block contains only padding bits,
+          // the compression counter for that block is zero instead of repeating the prior length.
           const internalLength = u64.select(chunkIsPad, u64.const(0), u64.mul(cnt, u64.const(8)));
           const L = T.from(u64.name, internalLength);
           V[12] = T.xor(V[12], L[0]);
@@ -810,6 +829,8 @@ export function genBlake2<T extends UnsignedType>(
         const { salt, personalization } = f.memory.init.lanes(lanes)[batchPos];
         const { state } = f.memory.state.lanes(lanes)[batchPos];
         const T = f.getTypeGeneric<UnsignedType, T>(type, lanes);
+        // src/hashes.ts preloads state[0..7] with the family IV; initBlake2 only xors p[0]
+        // and the optional salt/personalization words on top of that RFC 7693 base state.
         // 2) param word (low 32 bits): dkLen | (keyLen<<8) | (1<<16) | (1<<24)
         let p = u32.or(dkLen, u32.shl(keyLen, 8));
         p = u32.or(p, u32.shl(u32.const(1), 16));
@@ -865,7 +886,8 @@ export function genBlake2<T extends UnsignedType>(
         let V = state.get();
         let cnt = counter.get();
         [cnt, V] = f.doN1([cnt, V], N, (chunkPos, cnt, V) => {
-          const chunkIsLast = u32.and(u32.eq(chunkPos, u32.sub(N, u32.const(1))), isLast); // isLast & chunkPos==N-1
+          // isLast & chunkPos == N - 1
+          const chunkIsLast = u32.and(u32.eq(chunkPos, u32.sub(N, u32.const(1))), isLast);
           // last nonPad = blockLen-left
           // all others: blockLen
           // padding = 0
@@ -922,11 +944,13 @@ export function genBlake3(_type: TypeName, _opts = {}) {
         lastBlockRem: 'u32',
         iv: array('u32', {}, 8), // personalized iv, can be different from B3_IV
         state: array('u32', {}, 8),
-        stack: array('u32', {}, 64, 8), // max stack for u64 is actually 55, but we're extra-cautious
+        // max stack for u64 is actually 55, but we're extra-cautious
+        stack: array('u32', {}, 64, 8),
       })
     )
     .mem('buffer', array('u32', {}, CHUNKS / 16, 16, 16)) // 16 * 16 * 4 = 1024 (1kb)
-    // if everything is parallel and 1 block per parallel message, each block produces 1 stack entry.
+    // If everything is parallel and there is 1 block per parallel message,
+    // each block produces 1 stack entry.
     .mem('stackBuffer', array('u32', {}, CHUNKS, 8)) // up to 16 stack elm per 1kb of buffer
     .fn('compressParents', ['u32', 'u32', 'u32'], 'void', (f, batchPos, stackPos, stackPosOut) => {
       const { u32 } = f.types;
@@ -978,7 +1002,8 @@ export function genBlake3(_type: TypeName, _opts = {}) {
             chunks,
             curStackPos
           );
-          f.functions.compressParents.call(batchPos, curStackPos, curStackPos); // mod.compressParents(gFlags, stackPos, stackPos);
+          // mod.compressParents(gFlags, stackPos, stackPos);
+          f.functions.compressParents.call(batchPos, curStackPos, curStackPos);
           return [chunks, curStackPos];
         }
       );
@@ -1161,7 +1186,8 @@ export function genBlake3(_type: TypeName, _opts = {}) {
         - last non full chunk (blocks % 16): finish in parallel
         - Other cases? There should be some "configurable metric M/N ratio" that used to choose?
           - any reasonable defaults?
-        - parallelSize = 1: always use sequential, but we need parallel for leftovers/last non-full chunk.
+        - parallelSize = 1: always use sequential, but we still need parallel
+          for leftovers / the last non-full chunk.
         */
         const { u32 } = f.types;
         const inBlocks = blocks;
@@ -1363,7 +1389,8 @@ export function genBlake3(_type: TypeName, _opts = {}) {
           ),
           T.const(constants.B3_Flags.ROOT)
         );
-        // TODO: fix.
+        // XOF output replays the exact final ROOT compression with incrementing `t`, so stack[0..1]
+        // hold that call's 64-byte message: either the last chunk block or the two child CVs.
         const MSG = [...stack[0].get(), ...stack[1].get()];
         // doN1 == doWhile, will do at least once. don't call on empty inputs!
         let [curChunkOut] = f.doN1([chunkOut.get()], blocks, (cnt, curChunkOut) => {

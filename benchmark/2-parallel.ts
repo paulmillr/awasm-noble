@@ -27,7 +27,7 @@ const BUFFERS = {
 };
 
 async function main_threads() {
-  const CHUNKS = 64;
+  const CHUNKS = 48;
   const data = BUFFERS['1mb'];
   const opts = { unit: 'mb', multiplier: CHUNKS };
   const cdata = BUFFERS['10mb']

@@ -7,7 +7,7 @@ import type { CipherDef, CipherOpts } from './ciphers-abstract.ts';
 import { ARX_SIGMA16, ARX_SIGMA32 } from './constants.ts';
 import { type Modules } from './modules/index.ts'; // we can import only types here!
 import type * as TYPES from './targets/types.ts';
-import { abytes, anumber, u32 } from './utils.ts';
+import { abytes, anumber, u32, type TArg, type TRet } from './utils.ts';
 
 export const limit = (name: string, min: number, max: number) => (value: number) => {
   if (!Number.isSafeInteger(value) || min > value || value > max) {
@@ -16,7 +16,7 @@ export const limit = (name: string, min: number, max: number) => (value: number)
   }
 };
 
-const setCounter = (counterSeg: Uint32Array, counter: number) => {
+const setCounter = (counterSeg: TArg<Uint32Array>, counter: number) => {
   counterSeg[0] = counter >>> 0;
   counterSeg[1] = 0;
 };
@@ -32,13 +32,22 @@ export type ArxInit = {
   counterRight: boolean;
 };
 
+const MAX_COUNTER = 2 ** 32 - 1;
+const arxLimit = (len: number, args?: unknown[], pending = 0) => {
+  const opts = args?.[1] as ArxOpts | undefined;
+  const counter = opts?.counter === undefined ? 0 : opts.counter;
+  const avail = pending > 0 && pending < 64 ? 64 - pending : 0;
+  const blocks = Math.ceil(Math.max(0, len - avail) / 64);
+  if (blocks > 0 && counter > MAX_COUNTER - blocks) throw new Error('arx: counter overflow');
+};
+
 // Validations live in validate() because init() is lazy; tests expect errors at factory creation.
 export const initArx = (
   mod: any,
-  key: Uint8Array,
-  nonce: Uint8Array,
-  opts: ArxOpts | undefined,
-  cfg: ArxInit
+  key: TArg<Uint8Array>,
+  nonce: TArg<Uint8Array>,
+  opts: TArg<ArxOpts | undefined>,
+  cfg: TArg<ArxInit>
 ) => {
   const { allowShortKeys, extendNonce, counterLength, counterRight } = cfg;
   const counter = opts?.counter === undefined ? 0 : opts.counter;
@@ -76,10 +85,10 @@ export const initArx = (
 };
 // Factory-time validation: mkCipher init is lazy.
 const validateArx = (
-  key: Uint8Array,
-  nonce: Uint8Array,
-  opts: ArxOpts | undefined,
-  cfg: ArxInit
+  key: TArg<Uint8Array>,
+  nonce: TArg<Uint8Array>,
+  opts: TArg<ArxOpts | undefined>,
+  cfg: TArg<ArxInit>
 ) => {
   const { allowShortKeys, extendNonce, counterLength } = cfg;
   abytes(key, undefined, 'key');
@@ -104,8 +113,12 @@ const validateArx = (
   if (nonceNcLen !== n.length) throw new Error(`arx: nonce must be ${nonceNcLen} or 16 bytes`);
 };
 
-const arxBase = (cfg: ArxInit): CipherDef<any> => ({
+const arxBase = (cfg: TArg<ArxInit>): TRet<CipherDef<any>> => ({
   blockLen: 64,
+  // Match noble-ciphers raw stream semantics: caller-provided outputs must be the exact plaintext length.
+  exactOutput: true,
+  lengthLimitEnc: arxLimit,
+  lengthLimitDec: arxLimit,
   validate: (key, nonce, opts) => {
     validateArx(key, nonce as Uint8Array, opts as ArxOpts | undefined, cfg);
   },
@@ -115,13 +128,13 @@ const arxBase = (cfg: ArxInit): CipherDef<any> => ({
   },
 });
 
-export const salsa20: CipherDef<TYPES.SALSA20> = /* @__PURE__ */ (() =>
+export const salsa20: TRet<CipherDef<TYPES.SALSA20>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({ allowShortKeys: true, counterLength: 8, counterRight: true }),
     nonceLength: 8,
   }))();
 
-export const xsalsa20: CipherDef<TYPES.SALSA20> = /* @__PURE__ */ (() =>
+export const xsalsa20: TRet<CipherDef<TYPES.SALSA20>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({
       allowShortKeys: true,
@@ -132,19 +145,19 @@ export const xsalsa20: CipherDef<TYPES.SALSA20> = /* @__PURE__ */ (() =>
     nonceLength: 24,
   }))();
 
-export const chacha20orig: CipherDef<TYPES.CHACHA20> = /* @__PURE__ */ (() =>
+export const chacha20orig: TRet<CipherDef<TYPES.CHACHA20>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({ allowShortKeys: true, counterLength: 8, counterRight: false }),
     nonceLength: 8,
   }))();
 
-export const chacha20: CipherDef<TYPES.CHACHA20> = /* @__PURE__ */ (() =>
+export const chacha20: TRet<CipherDef<TYPES.CHACHA20>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({ allowShortKeys: false, counterLength: 4, counterRight: false }),
     nonceLength: 12,
   }))();
 
-export const xchacha20: CipherDef<TYPES.CHACHA20> = /* @__PURE__ */ (() =>
+export const xchacha20: TRet<CipherDef<TYPES.CHACHA20>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({
       allowShortKeys: false,
@@ -155,19 +168,19 @@ export const xchacha20: CipherDef<TYPES.CHACHA20> = /* @__PURE__ */ (() =>
     nonceLength: 24,
   }))();
 
-export const chacha8: CipherDef<TYPES.CHACHA8> = /* @__PURE__ */ (() =>
+export const chacha8: TRet<CipherDef<TYPES.CHACHA8>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({ allowShortKeys: false, counterLength: 4, counterRight: false }),
     nonceLength: 12,
   }))();
 
-export const chacha12: CipherDef<TYPES.CHACHA12> = /* @__PURE__ */ (() =>
+export const chacha12: TRet<CipherDef<TYPES.CHACHA12>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxBase({ allowShortKeys: false, counterLength: 4, counterRight: false }),
     nonceLength: 12,
   }))();
 
-const arxAeadBase = (cfg: ArxInit, tagLeft = false): CipherDef<any> => ({
+const arxAeadBase = (cfg: TArg<ArxInit>, tagLeft = false): TRet<CipherDef<any>> => ({
   blockLen: 64,
   tagLength: 16,
   tagLeft,
@@ -187,11 +200,11 @@ const arxAeadBase = (cfg: ArxInit, tagLeft = false): CipherDef<any> => ({
   },
   getTag: (mod) => {
     mod.tagFinish();
-    return mod.segments['state.poly.tag'].subarray(0, 16);
+    return mod.segments['state.poly.tag'].subarray(0, 16) as TRet<Uint8Array>;
   },
 });
 
-export const chacha20poly1305: CipherDef<any> = /* @__PURE__ */ (() =>
+export const chacha20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxAeadBase({
       allowShortKeys: false,
@@ -201,7 +214,7 @@ export const chacha20poly1305: CipherDef<any> = /* @__PURE__ */ (() =>
     nonceLength: 12,
   }))();
 
-export const xchacha20poly1305: CipherDef<any> = /* @__PURE__ */ (() =>
+export const xchacha20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxAeadBase({
       allowShortKeys: false,
@@ -212,7 +225,9 @@ export const xchacha20poly1305: CipherDef<any> = /* @__PURE__ */ (() =>
     nonceLength: 24,
   }))();
 
-export const xsalsa20poly1305: CipherDef<any> = /* @__PURE__ */ (() =>
+// XSalsa20-Poly1305 secretbox has no standard AAD; this inherits the
+// generic AEAD AAD slot as a local extension.
+export const xsalsa20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxAeadBase(
       { allowShortKeys: true, counterLength: 8, counterRight: true, extendNonce: true },
@@ -227,7 +242,7 @@ const AES_LEN_DEC = 'aes-(cbc/ecb).decrypt ciphertext should consist of blocks w
 const AES_PAD_EMPTY = 'aes/pcks5: empty ciphertext not allowed';
 const AES_PAD_BAD = 'aes/pcks5: wrong padding';
 
-const aesKey = (key: Uint8Array) => {
+const aesKey = (key: TArg<Uint8Array>) => {
   abytes(key, undefined, 'aes key');
   if (key.length !== 16 && key.length !== 24 && key.length !== 32) {
     throw new Error('"aes key" expected Uint8Array of length 16/24/32, got length=' + key.length);
@@ -236,8 +251,8 @@ const aesKey = (key: Uint8Array) => {
 
 const aesInit = (
   mod: any,
-  key: Uint8Array,
-  iv: Uint8Array | undefined,
+  key: TArg<Uint8Array>,
+  iv: TArg<Uint8Array | undefined>,
   dir: 'encrypt' | 'decrypt',
   useDec: boolean
 ) => {
@@ -250,8 +265,8 @@ const aesInit = (
 
 const aesInitCtr = (
   mod: any,
-  key: Uint8Array,
-  nonce: Uint8Array | undefined,
+  key: TArg<Uint8Array>,
+  nonce: TArg<Uint8Array | undefined>,
   dir: 'encrypt' | 'decrypt'
 ) => {
   const keySeg = mod.segments['state.key'];
@@ -261,7 +276,8 @@ const aesInitCtr = (
   else mod.decryptInit(key.length);
 };
 
-export const ecb: CipherDef<TYPES.AES_ECB> = {
+// NIST SP 800-38A §6.1: ECB repeats ciphertext blocks for repeated plaintext blocks under a key.
+export const ecb: TRet<CipherDef<TYPES.AES_ECB>> = {
   blockLen: 16,
   padding: true,
   lengthErrorEnc: AES_LEN_ENC,
@@ -278,7 +294,8 @@ export const ecb: CipherDef<TYPES.AES_ECB> = {
   },
 };
 
-export const cbc: CipherDef<TYPES.AES_CBC> = {
+// NIST SP 800-38A §5.3: CBC callers must supply an unpredictable 16-byte IV; this wrapper only validates its length.
+export const cbc: TRet<CipherDef<TYPES.AES_CBC>> = {
   blockLen: 16,
   nonceLength: 16,
   padding: true,
@@ -297,7 +314,8 @@ export const cbc: CipherDef<TYPES.AES_CBC> = {
   },
 };
 
-export const cfb: CipherDef<TYPES.AES_CFB> = {
+// NIST SP 800-38A §§5.3 and 6.3: CFB callers must supply an unpredictable 16-byte IV; this wrapper fixes s to the 128-bit AES block size.
+export const cfb: TRet<CipherDef<TYPES.AES_CFB>> = {
   blockLen: 16,
   nonceLength: 16,
   noOverlap: true,
@@ -310,7 +328,8 @@ export const cfb: CipherDef<TYPES.AES_CFB> = {
   },
 };
 
-export const ofb: CipherDef<TYPES.AES_OFB> = {
+// NIST SP 800-38A §6.4: OFB callers must supply a unique 16-byte IV for each use under a given key; this wrapper only validates its length.
+export const ofb: TRet<CipherDef<TYPES.AES_OFB>> = {
   blockLen: 16,
   nonceLength: 16,
   validate: (key, iv) => {
@@ -322,7 +341,8 @@ export const ofb: CipherDef<TYPES.AES_OFB> = {
   },
 };
 
-export const ctr: CipherDef<TYPES.AES_CTR> = {
+// NIST SP 800-38A §6.5 and Appendix B: CTR callers must supply a unique 16-byte initial counter block under each key; this wrapper only validates its length.
+export const ctr: TRet<CipherDef<TYPES.AES_CTR>> = {
   blockLen: 16,
   nonceLength: 16,
   validate: (key, nonce) => {
@@ -334,14 +354,16 @@ export const ctr: CipherDef<TYPES.AES_CTR> = {
   },
 };
 
+// AEAD backends take 64-bit length inputs as [lo, hi] u32 words via u64.fromN('u32', ...).
 const splitLen = (len: number) => {
   const v = BigInt(len);
   return [Number(v & 0xffffffffn), Number((v >> 32n) & 0xffffffffn)];
 };
 
+// Feed full blocks through the module buffer, zero-filling the unused tail so callbacks can finalize partial last blocks safely.
 const streamBlocks = (
   mod: any,
-  data: Uint8Array,
+  data: TArg<Uint8Array>,
   blockLen: number,
   run: (blocks: number, isLast: number, left: number) => void
 ) => {
@@ -360,12 +382,14 @@ const streamBlocks = (
     pos += take;
   }
 };
-const aadBlocks = (mod: any, data: Uint8Array) => {
+const aadBlocks = (mod: any, data: TArg<Uint8Array>) => {
   streamBlocks(mod, data, 16, (blocks, isLast, left) => {
     mod.aadBlocks(blocks, isLast, left);
   });
 };
-export const gcm: CipherDef<TYPES.AES_GCM> = {
+
+// NIST SP 800-38D §§5.2.1.1 and 8: GCM IVs must be unique per key; this wrapper supports variable-length byte IVs but only enforces a local minimum length.
+export const gcm: TRet<CipherDef<TYPES.AES_GCM>> = {
   blockLen: 16,
   nonceLength: 12,
   tagLength: 16,
@@ -401,11 +425,11 @@ export const gcm: CipherDef<TYPES.AES_GCM> = {
   },
   getTag: (mod) => {
     mod.tagFinish();
-    return mod.segments['state.tag'].subarray(0, 16);
+    return mod.segments['state.tag'].subarray(0, 16) as TRet<Uint8Array>;
   },
 };
 
-export const gcmsiv: CipherDef<TYPES.AES_GCMSIV> = /* @__PURE__ */ (() => {
+export const gcmsiv: TRet<CipherDef<TYPES.AES_GCMSIV>> = /* @__PURE__ */ (() => {
   const GCMSIV_AAD = /* @__PURE__ */ limit('AAD', 0, 2 ** 36);
   const GCMSIV_PLAIN = /* @__PURE__ */ limit('plaintext', 0, 2 ** 36);
   const GCMSIV_CIPHER = /* @__PURE__ */ limit('ciphertext', 16, 2 ** 36 + 16);
@@ -417,6 +441,7 @@ export const gcmsiv: CipherDef<TYPES.AES_GCMSIV> = /* @__PURE__ */ (() => {
     varSizeNonce: true,
     noOutput: true,
     noStream: true,
+    // RFC 8452 §§4-5, 9: AES-GCM-SIV decrypt must not release plaintext before tag confirmation, so round-0 output stays internal.
     multiPass: 2,
     multiPassResult: { encrypt: false, decrypt: true },
     multiPassOut: { decrypt: 0 },
@@ -426,6 +451,7 @@ export const gcmsiv: CipherDef<TYPES.AES_GCMSIV> = /* @__PURE__ */ (() => {
       const iv = nonce as Uint8Array;
       const aadBytes = aad as Uint8Array | undefined;
       abytes(iv, undefined, 'nonce');
+      // RFC 8452 standardizes only 16-byte and 32-byte keys; 24-byte AES-192 is a local extension.
       aesKey(key);
       GCMSIV_NONCE(iv.length);
       if (aadBytes) {
@@ -443,11 +469,11 @@ export const gcmsiv: CipherDef<TYPES.AES_GCMSIV> = /* @__PURE__ */ (() => {
       else mod.decryptInit(key.length, aadLo, aadHi);
       if (aadBytes && aadBytes.length) aadBlocks(mod, aadBytes);
     },
-    getTag: (mod) => mod.segments['state.tag'].subarray(0, 16),
+    getTag: (mod) => mod.segments['state.tag'].subarray(0, 16) as TRet<Uint8Array>,
   };
 })();
 
-export const aessiv: CipherDef<TYPES.AES_SIV> = {
+export const aessiv: TRet<CipherDef<TYPES.AES_SIV>> = {
   blockLen: 16,
   tagLength: 16,
   tagLeft: true,
@@ -455,6 +481,9 @@ export const aessiv: CipherDef<TYPES.AES_SIV> = {
   multiPass: 2,
   multiPassResult: { encrypt: false, decrypt: true },
   multiPassOut: { decrypt: 0 },
+  // RFC 5297 §2.7 verifies after CTR on decrypt, so mkCipher clears any round-0 candidate
+  // plaintext it wrote into caller output before surfacing invalid-tag failure.
+  // RFC 5297 §§3, 7: extra args are S2V AD components; nonce-based callers pass the nonce last, and plaintext is the 127th component so AD is capped at 126 entries.
   validate: (_key, ...aadList) => {
     const aad = aadList as Uint8Array[];
     if (aad.length > 126)
@@ -478,7 +507,7 @@ export const aessiv: CipherDef<TYPES.AES_SIV> = {
       else mod.aadBlocks(0, 1, 0);
     }
   },
-  getTag: (mod) => mod.segments['state.tag'].subarray(0, 16),
+  getTag: (mod) => mod.segments['state.tag'].subarray(0, 16) as TRet<Uint8Array>,
 };
 
 const AESKW_PLAIN = 'invalid plaintext length';
@@ -486,31 +515,36 @@ const AESKW_CIPHER = 'invalid ciphertext length';
 const AESKW_SHORT = '8-byte keys not allowed in AESKW, use AESKWP instead';
 const AESKW_PLAIN_4G = 'plaintext should be less than 4gb';
 const AESKW_CIPHER_4G = 'ciphertext should be less than 4gb';
-const aeskwInit = (mod: any, dir: 'encrypt' | 'decrypt', key: Uint8Array) => {
+const aeskwInit = (mod: any, dir: 'encrypt' | 'decrypt', key: TArg<Uint8Array>) => {
   mod.segments['state.key'].set(key);
   if (dir === 'encrypt') mod.encryptInit(key.length);
   else mod.decryptInit(key.length);
 };
+// RFC 3394 §2 leaves AES-KW input length unbounded; these wrappers still cap inputs below 2^32 bytes because callers and outputs are Uint8Array-sized.
 const kwPlainLimit = (len: number) => {
   if (len >= 2 ** 32) throw new Error(AESKW_PLAIN_4G);
   if (len === 8) throw new Error(AESKW_SHORT);
   if (!len || len % 8 !== 0) throw new Error(AESKW_PLAIN);
 };
+// RFC 3394 unwrap consumes (n+1) 64-bit blocks with n>=2, so AES-KW ciphertext is at least 24 bytes; this wrapper also keeps the local Uint8Array-sized cap below 2^32+8 bytes.
 const kwCipherLimit = (len: number) => {
   if (len - 8 >= 2 ** 32) throw new Error(AESKW_CIPHER_4G);
   if (len % 8 !== 0 || len < 24) throw new Error(AESKW_CIPHER);
 };
+// RFC 5649 allows 1..2^32 octets before padding; this Uint8Array API can only realize lengths below 2^32.
 const kwpPlainLimit = (len: number) => {
   if (len >= 2 ** 32) throw new Error(AESKW_PLAIN_4G);
   if (!len) throw new Error(AESKW_PLAIN);
 };
+// RFC 5649 unwrap works on two or more 64-bit blocks; this helper preflights only the min/max bound, and the shared paddingLeft branch rejects non-8-byte ciphertext lengths before module work.
 const kwpCipherLimit = (len: number) => {
   if (len - 8 >= 2 ** 32) throw new Error(AESKW_CIPHER_4G);
   if (len < 16) throw new Error(AESKW_CIPHER);
 };
 
-export const aeskw: CipherDef<TYPES.AES_KW> = {
+export const aeskw: TRet<CipherDef<TYPES.AES_KW>> = {
   blockLen: 8,
+  // RFC 3394 wraps a leading 64-bit A/C0 register plus six outer passes over A || R[1..n].
   paddingLeft: 8,
   noStream: true,
   noOutput: true,
@@ -527,8 +561,9 @@ export const aeskw: CipherDef<TYPES.AES_KW> = {
   },
 };
 
-export const aeskwp: CipherDef<TYPES.AES_KWP> = {
+export const aeskwp: TRet<CipherDef<TYPES.AES_KWP>> = {
   blockLen: 8,
+  // RFC 5649 wraps a leading 64-bit AIV register, pads only to the next 64-bit boundary, and uses the RFC 3394 six-pass path once more than one plaintext block is present.
   paddingLeft: 8,
   padding: true,
   padFull: false,

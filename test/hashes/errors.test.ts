@@ -1,5 +1,8 @@
 import { describe, should } from '@paulmillr/jsbt/test.js';
+import { throws } from 'node:assert';
 import { PLATFORMS } from '../platforms.ts';
+import { mkKDFStub } from '../../src/kdf.ts';
+import { scrypt as defScrypt } from '../../src/hashes.ts';
 import {
   blake2Opts,
   blake3Opts,
@@ -35,3 +38,17 @@ const algo = ({
 });
 
 for (const k in PLATFORMS) test(k, algo(PLATFORMS[k]), { describe, should });
+
+describe('kdf stub', () => {
+  should('rejects wrong implementation definition', () => {
+    const stub = mkKDFStub(defScrypt);
+    throws(() => stub.install(PLATFORMS.js.argon2id as any), {
+      message: 'wrong implementation definition',
+    });
+  });
+
+  should('accepts matching implementation definition', () => {
+    const stub = mkKDFStub(defScrypt);
+    stub.install(PLATFORMS.js.scrypt);
+  });
+});

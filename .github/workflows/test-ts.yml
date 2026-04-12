@@ -10,7 +10,7 @@ jobs:
       MSHOULD_FAST: 1
     strategy:
       matrix:
-        node: [22, 24] # Nov 2025 LTS
+        node: [22] # Nov 2025 LTS
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:

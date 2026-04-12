@@ -1,14 +1,14 @@
 # AWASM noble
 
-> Awesome? WASM? AWASM!
+> WASM, but paranoia-friendly
 
 Auditable WASM implementation of cryptographic hashes & ciphers.
 
 - 🔒 Auditable: reproducible binaries produced from JS source code
 - 🔻 Tree-shakeable: unused code is excluded from your builds
-- 🏎 Fast: [6-10GB/s for BLAKE3](#speed), 2GB/s for ChaCha20Poly1305
+- 🏎 Fast: [6-10 GB/s for BLAKE3](#speed), 6.4 GB/s for ChaCha20
 - 🔍 Reliable: tests from noble packages, zeroization tests
-- 5️⃣ Different backends: wasm (SIMD), threaded wasm (web workers), JS, webcrypto, runtime
+- 4️⃣ Different backends: wasm (SIMD), threaded wasm (web workers), JS, runtime
 - 🎫 Stubs: switch between backends based on app needs
 - 🦘 Includes SHA, RIPEMD, BLAKE, PBKDF, Scrypt, Argon2, Salsa, ChaCha, AES
 - 🪶 Lightweight
@@ -55,7 +55,7 @@ blake3(new Uint8Array([0xca, 0xfe]));
   + [Interface](#interface)
   + [Backends: wasm, wasm_threads, js, webcrypto, runtime](#backends-wasm-wasm_threads-js-webcrypto-runtime)
   + [Stubs](#stubs)
-  + [Parallel execution](#parallel-execution)
+  + [Threads](#threads)
   + [Streaming](#streaming)
   + [Async](#async)
   + [Zero-allocation](#zero-allocation)
@@ -148,50 +148,50 @@ to JS, WebCrypto, or other backend.
 
 ```ts
 import { sha256 } from '@awasm/noble/stub.js';
-function library() {
-  console.log(sha256(new Uint8Array([1, 2, 3]))); // generic stub
+function hash() {
+  console.log(sha256(new Uint8Array([1, 2, 3]))); // generic
 }
 
 // Switch to WASM
 import { sha256 as sha256wasm } from '@awasm/noble';
 sha256.install(sha256wasm);
-library();
+hash();
 
 // Switch to JS
 import { sha256 as sha256js } from '@awasm/noble/js.js';
 sha256.install(sha256js);
-library();
+hash();
 
 // Switch to WebCrypto
 import { sha256 as sha256Web } from '@awasm/noble/webcrypto.js';
-if (await sha256Web.isSupported()) sha256Stub.install(sha256Web);
-library();
+if (await sha256Web.isSupported()) sha256.install(sha256Web);
+hash();
 ```
 
-### Parallel execution
+### Threads
 
 ```ts
-import { sha256 } from '@awasm/noble';
+import { blake3 } from '@awasm/noble/wasm_threads.js';
+import { xchacha20poly1305 } from '@awasm/noble/wasm_threads.js';
+import { sha256 } from '@awasm/noble/wasm_threads.js';
 import { deepStrictEqual } from 'node:assert';
 
-// Very fast on multiple inputs
+blake3(new Uint8Array(1024 * 1024 * 1024)); // 1gb
+
 deepStrictEqual(sha256.parallel([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]), [
   sha256(new Uint8Array([1, 2, 3])),
   sha256(new Uint8Array([4, 5, 6])),
 ]);
-
-// Very fast on large inputs e.g. 100MB, 1GB
-import { blake3 } from '@awasm/noble/wasm_threaded.js';
-import { xchacha20poly1305 } from '@awasm/noble';
 ```
 
-Hashes and ciphers auto-use SIMD when platform supports it.
+Default backend (WASM) uses SIMD for parallel execution.
 
-BLAKE3 and ciphers auto-use parallelization
-in `wasm_threaded` backend, to ensure ultimate performance.
+`wasm_threads` also use web worker based threads.
+It requires `same-origin` & `require-corp` CORS policies to work.
 
-Non-parallel hashes & AES-CBC can't parallelize one large input using threads,
-but they still do it for multiple inputs.
+BLAKE3 & most ciphers run very fast in threaded mode. Others
+(e.g. SHA256, AES-CBC) can't parallelize one large input using threads,
+but they still do it for multiple inputs, using `hash.parallel(input)`.
 
 ### Streaming
 
@@ -528,19 +528,19 @@ sha256 x 1,600 mb/sec
 sha512 x 6,272 mb/sec
 sha3_256 x 6,976 mb/sec
 sha3_512 x 4,224 mb/sec
-blake2b x 8,064 mb/sec
-blake2s x 8,448 mb/sec
-blake3 32x1mb x 9,792 mb/sec
-blake3 1x1gb x 6,289 mb/sec
-ripemd160 x 5,248 mb/sec
-md5 x 8,448 mb/sec
-sha1 x 10,368 mb/sec
+blake2b x 9,065 mb/sec
+blake2s x 9,610 mb/sec
+blake3 48x1mb x 11,058 mb/sec
+blake3 1x100mb x 6,564 mb/sec
+ripemd160 x 6,588 mb/sec
+md5 x 9,078 mb/sec
+sha1 x 11,413 mb/sec
 
 # ciphers, input: 1gb +threads
 chacha20poly1305 x 2,318 mb/sec
+chacha20 x 6,530 mb/sec
 aes-gcm-256 x 1,015 mb/sec
 aes-gcm-siv-256 x 927 mb/sec
-chacha20 x 6,530 mb/sec
 aes-ecb-256 x 2,185 mb/sec
 aes-cbc-256 x 268 mb/sec
 aes-ctr-256 x 2,105 mb/sec

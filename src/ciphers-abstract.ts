@@ -11,13 +11,15 @@ import {
   mkAsync,
   type AsyncRunOpts,
   type AsyncSetup,
+  type TArg,
+  type TRet,
 } from './utils.ts';
 
 export type Cipher = {
-  encrypt(plaintext: Uint8Array, output?: Uint8Array): Uint8Array;
-  decrypt(ciphertext: Uint8Array, output?: Uint8Array): Uint8Array;
+  encrypt(plaintext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
+  decrypt(ciphertext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
 };
-export type CipherFactory = ((key: Uint8Array, ...args: unknown[]) => Cipher) & {
+export type CipherFactory = ((key: TArg<Uint8Array>, ...args: unknown[]) => TRet<Cipher>) & {
   blockSize: number;
   blockLen: number;
   nonceLength?: number;
@@ -47,13 +49,13 @@ export type CipherOpts = {
 };
 
 export type CipherStream = {
-  update(data: Uint8Array, output?: Uint8Array): Uint8Array;
-  finish(tag?: Uint8Array): { data: Uint8Array; tag?: Uint8Array };
+  update(data: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
+  finish(tag?: TArg<Uint8Array>): { data: TRet<Uint8Array>; tag?: TRet<Uint8Array> };
   destroy(): void;
   _cloneInto(to?: CipherStream): CipherStream;
   clone(): CipherStream;
-  saveState(): Uint8Array;
-  restoreState(state: Uint8Array): void;
+  saveState(): TRet<Uint8Array>;
+  restoreState(state: TArg<Uint8Array>): void;
 };
 
 type Dir = 'encrypt' | 'decrypt';
@@ -76,6 +78,7 @@ type CipherMod = {
 export type CipherDef<Mod> = CipherParams & {
   tagLeft?: boolean;
   dataOffset?: number;
+  exactOutput?: boolean;
   paddingLeft?: number;
   padding?: boolean;
   padFull?: boolean;
@@ -86,33 +89,35 @@ export type CipherDef<Mod> = CipherParams & {
   lengthError?: string;
   lengthErrorEnc?: string;
   lengthErrorDec?: string;
-  lengthLimitEnc?: (len: number) => void;
-  lengthLimitDec?: (len: number) => void;
+  lengthLimitEnc?: (len: number, args?: unknown[], pending?: number) => void;
+  lengthLimitDec?: (len: number, args?: unknown[], pending?: number) => void;
   padError?: string;
   emptyError?: string;
   noOverlap?: boolean;
   noOutput?: boolean;
   noStream?: boolean;
   twoPass?: boolean;
-  validate?: (key: Uint8Array, ...args: unknown[]) => void;
+  validate?: (key: TArg<Uint8Array>, ...args: unknown[]) => void;
   init: (
     mod: Mod,
     dir: Dir,
-    key: Uint8Array,
+    key: TArg<Uint8Array>,
     ...args: unknown[]
   ) => void | {
     disablePadding?: boolean;
   };
-  getTag?: (mod: Mod) => Uint8Array;
+  getTag?: (mod: Mod) => TRet<Uint8Array>;
 };
 
-const getOutput = (len: number, out?: Uint8Array) => {
-  if (!out) return new Uint8Array(len);
+const getOutput = (len: number, out?: TArg<Uint8Array>, exact = false): TRet<Uint8Array> => {
+  if (!out) return new Uint8Array(len) as TRet<Uint8Array>;
+  if (exact && out.length !== len)
+    throw new Error('"output" expected Uint8Array of length ' + len + ', got: ' + out.length);
   if (out.length < len) throw new Error('output is too small');
-  return out;
+  return out as TRet<Uint8Array>;
 };
 
-const equalBytes = (a: Uint8Array, b: Uint8Array) => {
+const equalBytes = (a: TArg<Uint8Array>, b: TArg<Uint8Array>) => {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
@@ -121,9 +126,10 @@ const equalBytes = (a: Uint8Array, b: Uint8Array) => {
 
 export const mkCipher = <Mod extends CipherMod>(
   modFn: () => Mod,
-  def: CipherDef<Mod>,
+  def_: TArg<CipherDef<Mod>>,
   platform?: string
-) => {
+): TRet<CipherFactory> => {
+  const def = def_ as CipherDef<Mod>;
   let mod: Mod | undefined;
   let BUFFER: Uint8Array;
   let STATE: Uint8Array;
@@ -174,11 +180,11 @@ export const mkCipher = <Mod extends CipherMod>(
     if (dir === 'encrypt') mod.encryptBlocks(blocks, isLast, left, round);
     else mod.decryptBlocks(blocks, isLast, left, round);
   };
-  const getTag = () => {
+  const getTag = (): TRet<Uint8Array> => {
     if (!def.getTag) throw new Error('missing getTag');
     return def.getTag(mod as Mod);
   };
-  const initCipher = (dir: Dir, key: Uint8Array, args: unknown[]) => {
+  const initCipher = (dir: Dir, key: TArg<Uint8Array>, args: unknown[]) => {
     if (!mod) throw new Error('missing module');
     const res = def.init(mod, dir, key, ...args);
     if (!padding || !res || typeof res !== 'object') return false;
@@ -186,13 +192,13 @@ export const mkCipher = <Mod extends CipherMod>(
   };
   const process = (
     dir: Dir,
-    data: Uint8Array,
-    output: Uint8Array | undefined,
-    key: Uint8Array,
+    data: TArg<Uint8Array>,
+    output: TArg<Uint8Array | undefined>,
+    key: TArg<Uint8Array>,
     args: unknown[]
-  ) => {
-    if (dir === 'encrypt' && def.lengthLimitEnc) def.lengthLimitEnc(data.length);
-    if (dir === 'decrypt' && def.lengthLimitDec) def.lengthLimitDec(data.length);
+  ): TRet<Uint8Array> => {
+    if (dir === 'encrypt' && def.lengthLimitEnc) def.lengthLimitEnc(data.length, args);
+    if (dir === 'decrypt' && def.lengthLimitDec) def.lengthLimitDec(data.length, args);
     let overlapCopy: Uint8Array | undefined;
     const cleanInput = () => {
       if (!overlapCopy) return;
@@ -274,8 +280,8 @@ export const mkCipher = <Mod extends CipherMod>(
                   copyFast(BUFFER, 0, a, 0, paddingLeft);
                   copyFast(BUFFER, paddingLeft, work, start, bytes);
                   const roundBase = round * rBlocks + pos + 1;
-                  // `runBlocks` may throw (e.g. padding/integrity on decrypt); mark touched prefix first
-                  // so reset scrubs buffer even on exceptional exits.
+                  // `runBlocks` may throw on decrypt integrity/padding checks.
+                  // Mark the touched prefix first so reset still scrubs on exceptional exits.
                   maxWritten = Math.max(maxWritten, paddingLeft + bytes);
                   runBlocks(dir, chunkR + 1, 1, 0, roundBase);
                   copyFast(a, 0, BUFFER, 0, paddingLeft);
@@ -291,8 +297,8 @@ export const mkCipher = <Mod extends CipherMod>(
                   copyFast(BUFFER, 0, a, 0, paddingLeft);
                   copyFast(BUFFER, paddingLeft, work, start, bytes);
                   const roundBase = (multiPass - 1 - round) * rBlocks + pos;
-                  // `runBlocks` may throw (e.g. padding/integrity on decrypt); mark touched prefix first
-                  // so reset scrubs buffer even on exceptional exits.
+                  // `runBlocks` may throw on decrypt integrity/padding checks.
+                  // Mark the touched prefix first so reset still scrubs on exceptional exits.
                   maxWritten = Math.max(maxWritten, paddingLeft + bytes);
                   runBlocks(dir, chunkR + 1, 1, 0, roundBase);
                   copyFast(a, 0, BUFFER, 0, paddingLeft);
@@ -307,12 +313,12 @@ export const mkCipher = <Mod extends CipherMod>(
               const gotPad = m.verifyPadding(totalLen, blockLen);
               if (gotPad > blockLen || (!padZeroOk && gotPad === 0)) throw new Error(padError());
               const outLen = totalLen - paddingLeft - gotPad;
-              const out = getOutput(totalLen - paddingLeft, output);
+              const out = getOutput(totalLen - paddingLeft, output, !!def.exactOutput);
               copyFast(out, 0, work, paddingLeft, outLen);
               cleanInput();
-              return out.subarray(0, outLen);
+              return out.subarray(0, outLen) as TRet<Uint8Array>;
             }
-            const out = getOutput(totalLen, output);
+            const out = getOutput(totalLen, output, !!def.exactOutput);
             copyFast(out, 0, work, 0, totalLen);
             cleanInput();
             return out;
@@ -327,8 +333,9 @@ export const mkCipher = <Mod extends CipherMod>(
           throw new Error(lengthError(dir) || 'invalid data length');
         let maxWritten = 0;
         try {
-          // This branch writes/reads [0..totalLen) in module buffer; if decrypt integrity checks throw,
-          // scrub the full touched prefix instead of leaving ciphertext/plaintext in buffer.
+          // This branch writes/reads [0..totalLen) in the module buffer.
+          // If decrypt integrity checks throw, scrub the full touched prefix instead of
+          // leaving ciphertext/plaintext in buffer.
           maxWritten = totalLen;
           if (dir === 'encrypt') {
             if (msg.length) copyFast(BUFFER, paddingLeft, msg, 0, msg.length);
@@ -336,7 +343,7 @@ export const mkCipher = <Mod extends CipherMod>(
             m.addPadding(msg.length, pad, blockLen);
             // Run all rounds inside the module when paddingLeft is used.
             runBlocks(dir, blocks, 1, 0, 0xffffffff);
-            const out = getOutput(totalLen, output);
+            const out = getOutput(totalLen, output, !!def.exactOutput);
             copyFast(out, 0, BUFFER, 0, totalLen);
             cleanInput();
             return out;
@@ -347,7 +354,7 @@ export const mkCipher = <Mod extends CipherMod>(
           const gotPad = m.verifyPadding(totalLen, blockLen);
           if (gotPad > blockLen || (!padZeroOk && gotPad === 0)) throw new Error(padError());
           const outLen = totalLen - paddingLeft - gotPad;
-          const out = getOutput(outLen, output);
+          const out = getOutput(outLen, output, !!def.exactOutput);
           copyFast(out, 0, BUFFER, paddingLeft, outLen);
           cleanInput();
           return out;
@@ -375,7 +382,7 @@ export const mkCipher = <Mod extends CipherMod>(
         const tagPrefix = dir === 'encrypt' && tagLeft ? tagLen : 0;
         const tagSuffix = dir === 'encrypt' && hasTag && !tagLeft ? tagLen : 0;
         const outLen = tagPrefix + cipherOutLen + tagSuffix;
-        const out = getOutput(outLen || 0, output);
+        const out = getOutput(outLen || 0, output, !!def.exactOutput);
         if (hasTag && dir === 'decrypt') {
           if (!passedTag) throw new Error(def.tagError || 'invalid tag');
           const tagSeg = (m as any).segments?.['state.tag'] as Uint8Array | undefined;
@@ -397,8 +404,8 @@ export const mkCipher = <Mod extends CipherMod>(
             ? work
             : new Uint8Array(cipherOutLen);
         const runPass = (
-          input: Uint8Array,
-          output: Uint8Array,
+          input: TArg<Uint8Array>,
+          output: TArg<Uint8Array>,
           round: number,
           applyPadding: boolean,
           applyVerify: boolean
@@ -450,6 +457,7 @@ export const mkCipher = <Mod extends CipherMod>(
         };
         let cur = msg;
         let outPos = 0;
+        let outTouched = 0;
         let maxWritten = 0;
         try {
           for (let round = 0; round < multiPass; round++) {
@@ -468,6 +476,7 @@ export const mkCipher = <Mod extends CipherMod>(
             const res = runPass(cur, target, round, applyPadding, applyVerify);
             outPos = res[0];
             maxWritten = Math.max(maxWritten, res[1]);
+            if (writeOut) outTouched = Math.max(outTouched, tagPrefix + res[0]);
             if (round !== multiPass - 1 && useResult) cur = target;
           }
           if (hasTag) {
@@ -476,11 +485,15 @@ export const mkCipher = <Mod extends CipherMod>(
               if (tagLeft) copyFast(out, 0, tag, 0, tagLen);
               else copyFast(out, tagPrefix + cipherOutLen, tag, 0, tagLen);
             } else if (!equalBytes(tag, passedTag as Uint8Array)) {
+              // Optional output buffers are scratch space.
+              // Earlier decrypt passes may have written candidate plaintext, so clear the
+              // touched prefix before surfacing invalid-tag failure.
+              if (outTouched) cleanFast(out, outTouched);
               throw new Error(def.tagError || 'invalid tag');
             }
           }
           cleanInput();
-          return out.subarray(0, tagPrefix + outPos + tagSuffix);
+          return out.subarray(0, tagPrefix + outPos + tagSuffix) as TRet<Uint8Array>;
         } finally {
           if (work2Owned && work2 !== work) cleanFast(work2);
           if (workOwned) cleanFast(work);
@@ -498,12 +511,12 @@ export const mkCipher = <Mod extends CipherMod>(
         const tagPrefix = dir === 'encrypt' && tagLeft ? tagLen : 0;
         const tagSuffix = dir === 'encrypt' && hasTag && !tagLeft ? tagLen : 0;
         const outLen = tagPrefix + msg.length + tagSuffix;
-        const out = getOutput(outLen || 0, output);
+        const out = getOutput(outLen || 0, output, !!def.exactOutput);
         let pos = 0;
         let outPos = 0;
         let maxWritten = 0;
         let processed = false;
-        const runMac = (input: Uint8Array) => {
+        const runMac = (input: TArg<Uint8Array>) => {
           pos = 0;
           processed = false;
           while (pos < input.length) {
@@ -522,7 +535,7 @@ export const mkCipher = <Mod extends CipherMod>(
           }
           if (!processed) macBlocks(0, 1, 0);
         };
-        const runCipher = (dir: Dir, input: Uint8Array, outBase: number) => {
+        const runCipher = (dir: Dir, input: TArg<Uint8Array>, outBase: number) => {
           pos = 0;
           processed = false;
           while (pos < input.length) {
@@ -567,7 +580,7 @@ export const mkCipher = <Mod extends CipherMod>(
           if (!equalBytes(computed, passedTag as Uint8Array))
             throw new Error(def.tagError || 'invalid tag');
           cleanInput();
-          return out.subarray(0, msg.length);
+          return out.subarray(0, msg.length) as TRet<Uint8Array>;
         } finally {
           reset(maxWritten);
         }
@@ -595,7 +608,7 @@ export const mkCipher = <Mod extends CipherMod>(
             if (pad) BUFFER.fill(0, paddingLeft + msg.length, paddingLeft + msg.length + pad);
             m.addPadding(msg.length, pad, blockLen);
             runBlocks(dir, blocks, 1, 0, -1);
-            const out = getOutput(totalLen, output);
+            const out = getOutput(totalLen, output, !!def.exactOutput);
             copyFast(out, 0, BUFFER, 0, totalLen);
             maxWritten = Math.max(maxWritten, totalLen);
             cleanInput();
@@ -606,7 +619,7 @@ export const mkCipher = <Mod extends CipherMod>(
           const gotPad = m.verifyPadding(totalLen, blockLen);
           if (gotPad > blockLen || (!padZeroOk && gotPad === 0)) throw new Error(padError());
           const outLen = totalLen - paddingLeft - gotPad;
-          const out = getOutput(outLen, output);
+          const out = getOutput(outLen, output, !!def.exactOutput);
           copyFast(out, 0, BUFFER, paddingLeft, outLen);
           maxWritten = Math.max(maxWritten, totalLen);
           cleanInput();
@@ -634,9 +647,10 @@ export const mkCipher = <Mod extends CipherMod>(
       const tagPrefix = dir === 'encrypt' && tagLeft ? tagLen : 0;
       const tagSuffix = dir === 'encrypt' && hasTag && !tagLeft ? tagLen : 0;
       const outLen = tagPrefix + cipherOutLen + tagSuffix;
-      const out = getOutput(outLen || 0, output);
+      const out = getOutput(outLen || 0, output, !!def.exactOutput);
       let pos = 0;
       let outPos = 0;
+      let outTouched = 0;
       let maxWritten = 0;
       let lastBytes = 0;
       let processed = false;
@@ -694,6 +708,7 @@ export const mkCipher = <Mod extends CipherMod>(
           if (bytes) {
             copyFast(out, tagPrefix + outPos, BUFFER, off, bytes);
             maxWritten = Math.max(maxWritten, off + totalBlocks * blockLen);
+            outTouched = Math.max(outTouched, tagPrefix + outPos + bytes);
             outPos += bytes;
           }
           if (isLast) lastBytes = bytes;
@@ -711,6 +726,7 @@ export const mkCipher = <Mod extends CipherMod>(
             if (bytes) {
               copyFast(out, tagPrefix + outPos, BUFFER, 0, bytes);
               maxWritten = Math.max(maxWritten, bytes);
+              outTouched = Math.max(outTouched, tagPrefix + outPos + bytes);
               outPos += bytes;
             }
           } else {
@@ -729,11 +745,15 @@ export const mkCipher = <Mod extends CipherMod>(
             if (tagLeft) copyFast(out, 0, tag, 0, tagLen);
             else copyFast(out, tagPrefix + cipherOutLen, tag, 0, tagLen);
           } else if (!equalBytes(tag, passedTag as Uint8Array)) {
+            // Optional output buffers are scratch space.
+            // Earlier decrypt passes may have written candidate plaintext, so clear the
+            // touched prefix before surfacing invalid-tag failure.
+            if (outTouched) cleanFast(out, outTouched);
             throw new Error(def.tagError || 'invalid tag');
           }
         }
         cleanInput();
-        return out.subarray(0, tagPrefix + outPos + tagSuffix);
+        return out.subarray(0, tagPrefix + outPos + tagSuffix) as TRet<Uint8Array>;
       } finally {
         reset(maxWritten);
       }
@@ -765,8 +785,8 @@ export const mkCipher = <Mod extends CipherMod>(
       this.pos = 0;
       if (!mod) throw new Error('missing module');
       if (from) {
-        // clone() can reuse the captured stream state directly; re-running initCipher here only does
-        // setup work that clone immediately overwrites.
+        // clone() can reuse the captured stream state directly.
+        // Re-running initCipher here only does setup work that clone immediately overwrites.
         this.disablePadding = from.disablePadding;
         this.state = copyBytes(from.state);
         return;
@@ -781,17 +801,21 @@ export const mkCipher = <Mod extends CipherMod>(
     private _saveState() {
       copyFast(this.state, 0, STATE, 0, STATE.length);
     }
-    saveState(): Uint8Array {
+    saveState(): TRet<Uint8Array> {
       return copyBytes(this.state);
     }
-    restoreState(state: Uint8Array): void {
+    restoreState(state: TArg<Uint8Array>): void {
       if (state.length !== this.state.length) throw new Error('invalid state');
       copyFast(this.state, 0, state, 0, state.length);
     }
-    update(data: Uint8Array, output?: Uint8Array): Uint8Array {
+    update(data: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array> {
       abytes(data);
       if (this.destroyed) throw new Error('Cipher instance has been destroyed');
       if (this.finished) throw new Error('Cipher#finish() has already been called');
+      if (this.dir === 'encrypt' && def.lengthLimitEnc)
+        def.lengthLimitEnc(data.length, this.args, this.pos);
+      if (this.dir === 'decrypt' && def.lengthLimitDec)
+        def.lengthLimitDec(data.length, this.args, this.pos);
       if (padding && this.disablePadding && data.length % blockLen !== 0)
         throw new Error(lengthError(this.dir) || 'invalid data length');
       const holdLast = padding && !this.disablePadding && this.dir === 'decrypt' ? blockLen : 0;
@@ -811,7 +835,7 @@ export const mkCipher = <Mod extends CipherMod>(
         const totalRem = total % blockLen;
         return bufferPartial && totalRem ? total - totalRem : total;
       })();
-      const out = getOutput(outLen, output);
+      const out = getOutput(outLen, output, !!def.exactOutput);
       let outPos = 0;
       let msgPos = 0;
       let maxWritten = 0;
@@ -856,7 +880,7 @@ export const mkCipher = <Mod extends CipherMod>(
             this.pos -= bytes;
           }
           this._saveState();
-          return out.subarray(0, outPos);
+          return out.subarray(0, outPos) as TRet<Uint8Array>;
         }
         if (this.pos) {
           // dataOffset reduces first-block capacity; honor it for buffered updates.
@@ -896,7 +920,8 @@ export const mkCipher = <Mod extends CipherMod>(
         }
         const leftover = data.length - msgPos;
         if (leftover) {
-          // Buffer tail so chunked updates don't advance the block counter early (CTR/stream correctness).
+          // Buffer tail so chunked updates do not advance the block counter early.
+          // This keeps CTR/stream semantics correct.
           copyFast(this.buf, this.pos, data, msgPos, leftover);
           this.pos += leftover;
         }
@@ -904,9 +929,9 @@ export const mkCipher = <Mod extends CipherMod>(
       } finally {
         reset(maxWritten);
       }
-      return out.subarray(0, outPos);
+      return out.subarray(0, outPos) as TRet<Uint8Array>;
     }
-    finish(tag?: Uint8Array): { data: Uint8Array; tag?: Uint8Array } {
+    finish(tag?: TArg<Uint8Array>): { data: TRet<Uint8Array>; tag?: TRet<Uint8Array> } {
       if (this.destroyed) throw new Error('Cipher instance has been destroyed');
       if (this.finished) throw new Error('Cipher#finish() has already been called');
       this.finished = true;
@@ -916,8 +941,8 @@ export const mkCipher = <Mod extends CipherMod>(
       if (!mod) throw new Error('missing module');
       const m = mod;
       let maxWritten = 0;
-      let data = new Uint8Array(0);
-      let tagOut: Uint8Array | undefined = undefined;
+      let data = new Uint8Array(0) as TRet<Uint8Array>;
+      let tagOut: TRet<Uint8Array> | undefined = undefined;
       const dataOffset = def.dataOffset || 0;
       let off = 0;
       try {
@@ -994,7 +1019,7 @@ export const mkCipher = <Mod extends CipherMod>(
           const outBlocks = padApplied ? totalBlocks : blocks;
           const rawLen = outBlocks * blockLen - outLeft;
           const outLen = rawLen;
-          if (!outLen) data = new Uint8Array(0);
+          if (!outLen) data = new Uint8Array(0) as TRet<Uint8Array>;
           else data = copyBytes(BUFFER.subarray(off, off + outLen));
         }
         if (hasTag) {
@@ -1038,7 +1063,7 @@ export const mkCipher = <Mod extends CipherMod>(
       return this._cloneInto();
     }
   }
-  const cipherFactory = (key: Uint8Array, ...args: unknown[]) => {
+  const cipherFactory = ((key: TArg<Uint8Array>, ...args: unknown[]) => {
     lazyInit();
     abytes(key);
     if (def.nonceLength !== undefined) {
@@ -1049,7 +1074,7 @@ export const mkCipher = <Mod extends CipherMod>(
     if (def.validate) def.validate(key, ...args);
     let used = false;
     const make = (dir: Dir) => {
-      const fn = (data: Uint8Array, output?: Uint8Array) => {
+      const fn = (data: TArg<Uint8Array>, output?: TArg<Uint8Array>) => {
         abytes(data);
         if (output !== undefined && def.noOutput) throw new Error('cipher output not supported');
         if (dir === 'encrypt') {
@@ -1067,14 +1092,14 @@ export const mkCipher = <Mod extends CipherMod>(
           >
         | undefined;
       Object.assign(fn, {
-        async: (data: Uint8Array, output?: Uint8Array, opts?: AsyncRunOpts) =>
+        async: (data: TArg<Uint8Array>, output?: TArg<Uint8Array>, opts?: TArg<AsyncRunOpts>) =>
           (
             run ||
             (run = mkAsync(function* (
-              setup,
-              data: Uint8Array,
-              output?: Uint8Array,
-              opts?: AsyncRunOpts
+              setup: TArg<AsyncSetup>,
+              data: TArg<Uint8Array>,
+              output?: TArg<Uint8Array>,
+              opts?: TArg<AsyncRunOpts>
             ) {
               const setupMode = setup as AsyncSetup & { isAsync?: boolean };
               if (!setupMode.isAsync && !opts?.onProgress) return fn(data, output);
@@ -1103,8 +1128,8 @@ export const mkCipher = <Mod extends CipherMod>(
       });
       return fn;
     };
-    return { encrypt: make('encrypt'), decrypt: make('decrypt') } as Cipher;
-  };
+    return { encrypt: make('encrypt'), decrypt: make('decrypt') } as TRet<Cipher>;
+  }) as CipherFactory;
   Object.assign(cipherFactory, {
     blockSize: def.blockLen,
     blockLen: def.blockLen,
@@ -1115,45 +1140,56 @@ export const mkCipher = <Mod extends CipherMod>(
     getDefinition: () => def,
   });
   brandSet.add(cipherFactory);
-  return Object.freeze(cipherFactory);
+  return Object.freeze(cipherFactory) as TRet<CipherFactory>;
 };
 
 type AsyncCipherImpl = {
-  encrypt: (data: Uint8Array) => Promise<Uint8Array>;
-  decrypt: (data: Uint8Array) => Promise<Uint8Array>;
+  encrypt: (data: Uint8Array) => Promise<TRet<Uint8Array>>;
+  decrypt: (data: Uint8Array) => Promise<TRet<Uint8Array>>;
 };
 
 const cipherSyncError = () => {
   throw new Error('sync is not supported');
 };
 
-const copyCipherOutput = (res: Uint8Array, out?: Uint8Array) => {
-  if (!out) return res;
+const copyCipherOutput = (res: TArg<Uint8Array>, out?: TArg<Uint8Array>): TRet<Uint8Array> => {
+  if (!out) return res as TRet<Uint8Array>;
   if (out.length < res.length) throw new Error('output is too small');
   out.set(res.subarray(0, res.length), 0);
   clean(res);
-  return out;
+  return out as TRet<Uint8Array>;
 };
 
 export const mkCipherAsync = <Mod extends CipherMod>(
-  def: CipherDef<Mod>,
-  init: (key: Uint8Array, ...args: unknown[]) => AsyncCipherImpl,
+  def_: TArg<CipherDef<Mod>>,
+  init_: TArg<(key: Uint8Array, ...args: unknown[]) => AsyncCipherImpl>,
   platform = 'webcrypto',
   isSupported?: () => boolean | Promise<boolean>
-) => {
-  const factory = ((key: Uint8Array, ...args: unknown[]) => {
+): TRet<CipherFactory> => {
+  const def = def_ as CipherDef<Mod>;
+  const init = init_ as (key: Uint8Array, ...args: unknown[]) => AsyncCipherImpl;
+  const factory = ((key: TArg<Uint8Array>, ...args: unknown[]) => {
     abytes(key, undefined, 'key');
     if (def.validate) def.validate(key, ...args);
     const impl = init(key, ...args);
-    const mk = (run: (data: Uint8Array) => Promise<Uint8Array>) => {
-      const fn = ((_: Uint8Array, _out?: Uint8Array) =>
+    const mk = (run: TArg<(data: Uint8Array) => Promise<TRet<Uint8Array>>>) => {
+      const fn = ((_: TArg<Uint8Array>, _out?: TArg<Uint8Array>) =>
         cipherSyncError()) as unknown as Cipher['encrypt'] & {
-        async: (data: Uint8Array, out?: Uint8Array, opts?: AsyncRunOpts) => Promise<Uint8Array>;
+        async: (
+          data: TArg<Uint8Array>,
+          out?: TArg<Uint8Array>,
+          opts?: TArg<AsyncRunOpts>
+        ) => Promise<TRet<Uint8Array>>;
         create: () => never;
       };
-      fn.async = async (data: Uint8Array, out?: Uint8Array, _opts?: AsyncRunOpts) => {
+      fn.async = async (
+        data: TArg<Uint8Array>,
+        out?: TArg<Uint8Array>,
+        _opts?: TArg<AsyncRunOpts>
+      ) => {
         abytes(data, undefined, 'data');
-        const res = await run(data);
+        const rawRun = run as (data: Uint8Array) => Promise<TRet<Uint8Array>>;
+        const res = await rawRun(data as Uint8Array);
         return copyCipherOutput(res, out);
       };
       fn.create = () => {
@@ -1161,7 +1197,7 @@ export const mkCipherAsync = <Mod extends CipherMod>(
       };
       return fn;
     };
-    return { encrypt: mk(impl.encrypt), decrypt: mk(impl.decrypt) } as Cipher;
+    return { encrypt: mk(impl.encrypt), decrypt: mk(impl.decrypt) } as TRet<Cipher>;
   }) as CipherFactory;
   Object.assign(factory, {
     blockSize: def.blockLen,
@@ -1174,17 +1210,18 @@ export const mkCipherAsync = <Mod extends CipherMod>(
   });
   if (isSupported) (factory as any).isSupported = isSupported;
   brandSet.add(factory as object);
-  return Object.freeze(factory);
+  return Object.freeze(factory) as TRet<CipherFactory>;
 };
 
 export function mkCipherStub<Mod extends CipherMod>(
-  def: CipherDef<Mod>
-): CipherFactory & CipherStub {
-  let inner: CipherFactory | undefined;
+  def_: TArg<CipherDef<Mod>>
+): TRet<CipherFactory & CipherStub> {
+  const def = def_ as CipherDef<Mod>;
+  let inner: TArg<CipherFactory> | undefined;
   const checkInner = () => {
     if (inner === undefined) throw new Error('implementation not installed');
   };
-  const stub = ((key: Uint8Array, ...args: unknown[]) => {
+  const stub = ((key: TArg<Uint8Array>, ...args: unknown[]) => {
     checkInner();
     const impl = inner as CipherFactory;
     return impl(key, ...args);
@@ -1200,7 +1237,7 @@ export function mkCipherStub<Mod extends CipherMod>(
       const impl = inner as CipherFactory;
       return impl.getDefinition();
     },
-    install: (impl: CipherFactory) => {
+    install: (impl: TArg<CipherFactory>) => {
       if (!isBranded(impl)) throw new Error('install: non-branded implementation');
       if (impl.getDefinition() !== def) throw new Error('wrong implementation definition');
       inner = impl;
@@ -1211,5 +1248,5 @@ export function mkCipherStub<Mod extends CipherMod>(
     tagLength: def.tagLength,
     varSizeNonce: def.varSizeNonce,
   });
-  return Object.freeze(stub);
+  return Object.freeze(stub) as TRet<CipherFactory & CipherStub>;
 }

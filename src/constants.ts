@@ -2,7 +2,7 @@
  * Constants for hashes and ciphers. Mostly initial state.
  * @module
  */
-import { u8 } from './utils.ts';
+import { u8, type TRet } from './utils.ts';
 
 /**
  * Round constants:
@@ -26,13 +26,14 @@ export const SHA256_IV = /* @__PURE__ */ new Uint32Array([
 export const SHA256_IV_U8 = /* @__PURE__ */ u8(SHA256_IV);
 
 /** Initial SHA224 state. Bits 32..64 of frac part of sqrt of primes 23..53 */
-export const SHA224_IV: Uint32Array = /* @__PURE__ */ Uint32Array.from([
+export const SHA224_IV: TRet<Uint32Array> = /* @__PURE__ */ Uint32Array.from([
   0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4,
 ]);
 export const SHA224_IV_U8 = /* @__PURE__ */ u8(SHA224_IV);
 
-// Round contants
-// First 32 bits of the fractional parts of the cube roots of the first 80 primes 2..409
+// Round constants
+// RFC 6234 §5.2:
+// first 64 bits of the fractional parts of the cube roots of the first 80 primes.
 // prettier-ignore
 export const SHA512_K = /* @__PURE__ */ [
   '0x428a2f98d728ae22', '0x7137449123ef65cd', '0xb5c0fbcfec4d3b2f', '0xe9b5dba58189dbbc',
@@ -56,15 +57,17 @@ export const SHA512_K = /* @__PURE__ */ [
   '0x4cc5d4becb3e42b6', '0x597f299cfc657e2a', '0x5fcb6fab3ad6faec', '0x6c44198c4a475817',
 ].map((n) => BigInt(n));
 
+// 64-bit SHA-2 IV words are stored as [lo, hi] u32 pairs.
+// This lets u8(...) seed native module state directly.
 /** Initial SHA512 state. Bits 0..64 of frac part of sqrt of primes 2..19 */
-export const SHA512_IV: Uint32Array = /* @__PURE__ */ Uint32Array.from([
+export const SHA512_IV: TRet<Uint32Array> = /* @__PURE__ */ Uint32Array.from([
   0xf3bcc908, 0x6a09e667, 0x84caa73b, 0xbb67ae85, 0xfe94f82b, 0x3c6ef372, 0x5f1d36f1, 0xa54ff53a,
   0xade682d1, 0x510e527f, 0x2b3e6c1f, 0x9b05688c, 0xfb41bd6b, 0x1f83d9ab, 0x137e2179, 0x5be0cd19,
 ]);
 export const SHA512_IV_U8 = /* @__PURE__ */ u8(SHA512_IV);
 
 /** Initial SHA384 state. Bits 0..64 of frac part of sqrt of primes 23..53 */
-export const SHA384_IV: Uint32Array = /* @__PURE__ */ Uint32Array.from([
+export const SHA384_IV: TRet<Uint32Array> = /* @__PURE__ */ Uint32Array.from([
   0xc1059ed8, 0xcbbb9d5d, 0x367cd507, 0x629a292a, 0x3070dd17, 0x9159015a, 0xf70e5939, 0x152fecd8,
   0xffc00b31, 0x67332667, 0x68581511, 0x8eb44a87, 0x64f98fa7, 0xdb0c2e0d, 0xbefa4fa4, 0x47b5481d,
 ]);
@@ -75,6 +78,8 @@ export const SHA384_IV_U8 = /* @__PURE__ */ u8(SHA384_IV);
  * SHA512_IV is XORed with 0xa5a5a5a5a5a5a5a5, then used as "intermediary" IV of SHA512/t.
  * Then t hashes string to produce result IV.
  */
+// Derived SHA-512/t IVs also use [lo, hi] u32 pairs here.
+// That lets hashes.ts seed the shared SHA-512 state layout directly.
 
 /** SHA512/224 IV */
 const SHA512_224_IV = /* @__PURE__ */ Uint32Array.from([
@@ -89,6 +94,8 @@ const SHA512_256_IV = /* @__PURE__ */ Uint32Array.from([
 ]);
 export const SHA512_256_IV_U8 = /* @__PURE__ */ u8(SHA512_256_IV);
 
+// RFC 7693 §2.6 / Appendix C: BLAKE2b reuses the SHA-512 IV words.
+// This file keeps them as LE [lo, hi] u32 halves for the BLAKE2b helpers.
 // Same as SHA512_IV, but swapped endianness: LE instead of BE. iv[1] is iv[0], etc.
 export const B2B_IV = /* @__PURE__ */ Uint32Array.from([
   0xf3bcc908, 0x6a09e667, 0x84caa73b, 0xbb67ae85, 0xfe94f82b, 0x3c6ef372, 0x5f1d36f1, 0xa54ff53a,
@@ -107,13 +114,19 @@ export const B2B_IV_U64 = [
   0x5be0cd19_137e2179n,
 ];
 
+// RFC 7693 §2.6 / Appendix D: BLAKE2s reuses the SHA-256 IV words as-is.
 export const B2S_IV = /* @__PURE__ */ Uint32Array.from([
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ]);
 export const B2S_IV_U8 = /* @__PURE__ */ u8(B2S_IV);
 
+// SHA-3 proposal BLAKE v1.2 §2.1.1 Table 2.1 / RFC 7693 §2.7:
+// rows 0..9 are the published SIGMA table; rows 10..11 repeat 0..1 for BLAKE2b;
+// rows 10..13 satisfy SHA-3 proposal BLAKE v1.2 §2.2.2's sigma[r mod 10] reuse for 14-round
+// BLAKE-64; rows 14..15 extend that modulo-10 reuse for the legacy 16-round
+// Blake1 path.
 // prettier-ignore
-export const BSIGMA: Uint8Array = /* @__PURE__ */ Uint8Array.from([
+export const BSIGMA: TRet<Uint8Array> = /* @__PURE__ */ Uint8Array.from([
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
   11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
@@ -136,11 +149,15 @@ export const BSIGMA: Uint8Array = /* @__PURE__ */ Uint8Array.from([
 // blake1
 
 // first half of C512
+// SHA-3 proposal BLAKE v1.2 §2.1.1: BLAKE-32 uses c0..c15,
+// starting at 0x243f6a88 and ending at 0xb5470917.
 export const B32C = /* @__PURE__ */ Uint32Array.from([
   0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344, 0xa4093822, 0x299f31d0, 0x082efa98, 0xec4e6c89,
   0x452821e6, 0x38d01377, 0xbe5466cf, 0x34e90c6c, 0xc0ac29b7, 0xc97c50dd, 0x3f84d5b5, 0xb5470917,
 ]);
 // prettier-ignore
+// SHA-3 proposal BLAKE v1.2 §2.2.1 c0..c15 are stored as [lo32, hi32] halves.
+// generateTBL512_new rebuilds each 64-bit constant with (hi << 32n) | lo.
 export const B64C = /* @__PURE__ */ (() =>
   Uint32Array.from([
   B32C[1], B32C[0], B32C[3], B32C[2], B32C[5], B32C[4], B32C[7], B32C[6], // le<->be
@@ -171,7 +188,9 @@ export const B64C_U64 = [
 ];
 
 export const B256_IV = /* @__PURE__ */ SHA256_IV.slice();
-// SHA512_IV, different order here
+// SHA-3 proposal BLAKE v1.2 §2.2.1: legacy Blake1-64 keeps the SHA-512 IV in canonical
+// [hi32, lo32] order, unlike SHA512_IV above, which is laid out as [lo, hi]
+// for module-state seeding.
 export const B512_IV = /* @__PURE__ */ Uint32Array.from([
   0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1,
   0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179,
@@ -204,18 +223,26 @@ function generateTBL512_new(): bigint[] {
 }
 export const TBL512 = /* @__PURE__ */ generateTBL512_new();
 
+/** Initial SHA-1 state from RFC 3174 §6.1. */
 export const SHA1_IV = /* @__PURE__ */ Uint32Array.from([
   0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0,
 ]);
 export const SHA1_IV_U8 = /* @__PURE__ */ u8(SHA1_IV);
 
 const p32 = /* @__PURE__ */ Math.pow(2, 32);
+/** RFC 1321 §3.4 / Appendix A.3 `T[1..64]` table. */
 export const MD5_K = /* @__PURE__ */ Array.from({ length: 64 }, (_, i) =>
   Math.floor(p32 * Math.abs(Math.sin(i + 1)))
 );
+/**
+ * RFC 1321 §3.3 / Appendix A.3 MD5 initial state.
+ * It matches the first four SHA-1 words, so slice() copies them without
+ * aliasing SHA1_IV.
+ */
 export const MD5_IV = /* @__PURE__ */ SHA1_IV.slice(0, 4);
 export const MD5_IV_U8 = /* @__PURE__ */ u8(MD5_IV);
 
+/** RIPEMD-160 initial state; same five 32-bit words as SHA-1. */
 export const RIPEMD160_IV = /* @__PURE__ */ new Uint32Array([
   0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0,
 ]);
@@ -226,6 +253,7 @@ const Rho160 = /* @__PURE__ */ Uint8Array.from([
 ]);
 const Id160 = /* @__PURE__ */ (() => Uint8Array.from(new Array(16).fill(0).map((_, i) => i)))();
 const Pi160 = /* @__PURE__ */ (() => Id160.map((i) => (9 * i + 5) % 16))();
+// Five left/right message-word orderings for the RIPEMD-160 dual-lane rounds.
 const idxLR = /* @__PURE__ */ (() => {
   const L = [Id160];
   const R = [Pi160];
@@ -237,6 +265,7 @@ export const RIPEMD160_idxL = /* @__PURE__ */ (() => idxLR[0])();
 export const RIPEMD160_idxR = /* @__PURE__ */ (() => idxLR[1])();
 // const [idxL, idxR] = idxLR;
 
+// Base per-group shift table before the left/right message-order permutations are applied.
 const shifts160 = /* @__PURE__ */ [
   [11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8],
   [12, 13, 11, 15, 6, 9, 9, 7, 12, 15, 11, 13, 7, 8, 7, 7],
@@ -250,9 +279,11 @@ export const RIPEMD160_shiftsL160 = /* @__PURE__ */ RIPEMD160_idxL.map((idx, i) 
 export const RIPEMD160_shiftsR160 = /* @__PURE__ */ RIPEMD160_idxR.map((idx, i) =>
   idx.map((j) => shifts160[i][j])
 );
+// Five left-lane additive constants for RIPEMD-160.
 export const RIPEMD160_Kl160 = /* @__PURE__ */ Uint32Array.from([
   0x00000000, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e,
 ]);
+// Five right-lane additive constants for RIPEMD-160.
 export const RIPEMD160_Kr160 = /* @__PURE__ */ Uint32Array.from([
   0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0x00000000,
 ]);
@@ -262,9 +293,14 @@ const _1n = /* @__PURE__ */ BigInt(1);
 const _2n = /* @__PURE__ */ BigInt(2);
 const _7n = /* @__PURE__ */ BigInt(7);
 const _256n = /* @__PURE__ */ BigInt(256);
+// FIPS 202 Algorithm 5 rc():
+// when the outgoing bit is 1, the 8-bit LFSR xors taps 0, 4, 5, and 6.
+// That compresses to the feedback mask `0x71`.
 const _0x71n = /* @__PURE__ */ BigInt(0x71);
 // Grouped export destructuring sticks in bundles even when SHA3 is unused, so generate
 // each table in its own pure IIFE instead of exporting all three from one object.
+// FIPS 202 §3.2.2 / §3.2.3 walk the 24 non-(0,0) lanes.
+// This table stores each lane as 5*y + x for the u64 state layout.
 export const SHA3_PI2 = /* @__PURE__ */ (() => {
   const SHA3_PI2: number[] = [];
   for (let round = 0, x = 1, y = 0; round < 24; round++) {
@@ -295,6 +331,7 @@ export const SHA3_IOTA = /* @__PURE__ */ (() => {
 })();
 
 // Flag bitset
+// BLAKE3 compression-domain flags from Table~\ref{tab:flags}.
 export const B3_Flags = {
   CHUNK_START: 0b1,
   CHUNK_END: 0b10,
@@ -305,18 +342,27 @@ export const B3_Flags = {
   DERIVE_KEY_MATERIAL: 0b1000000,
 } as const;
 
+// Default BLAKE3 IV, cloned from the shared BLAKE2s / SHA-256 IV basis.
 export const B3_IV = /* @__PURE__ */ SHA256_IV.slice();
 export const B3_IV_U8 = /* @__PURE__ */ u8(B3_IV);
 
-export const B3_SIGMA: Uint8Array = /* @__PURE__ */ (() => {
+// Seven 16-word rounds of the BLAKE3 message schedule.
+// Generated by repeatedly applying the adopted single permutation.
+export const B3_SIGMA: TRet<Uint8Array> = /* @__PURE__ */ (() => {
   const Id = Array.from({ length: 16 }, (_, i) => i);
   const permute = (arr: number[]) =>
     [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8].map((i) => arr[i]);
   const res: number[] = [];
   for (let i = 0, v = Id; i < 7; i++, v = permute(v)) res.push(...v);
-  return Uint8Array.from(res);
+  return Uint8Array.from(res) as TRet<Uint8Array>;
 })();
 
+// Replaces `TextEncoder` for ASCII literals, which is enough for sigma constants.
+// Non-ASCII input would not match UTF-8 `TextEncoder` output.
 const encodeStr = (str: string) => Uint8Array.from(str.split(''), (c) => c.charCodeAt(0));
+// RFC 8439 §2.3 / RFC 7539 §2.3 only define the 256-bit-key constants; this 16-byte sigma is
+// kept for legacy allowShortKeys Salsa/ChaCha variants.
 export const ARX_SIGMA16 = /* @__PURE__ */ encodeStr('expand 16-byte k');
+// RFC 8439 §2.3 / RFC 7539 §2.3 define words 0-3 as
+// `0x61707865 0x3320646e 0x79622d32 0x6b206574`, i.e. `expand 32-byte k`.
 export const ARX_SIGMA32 = /* @__PURE__ */ encodeStr('expand 32-byte k');

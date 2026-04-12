@@ -3,28 +3,36 @@
  * @module
  */
 import type { HashInstance, HashStream } from './hashes-abstract.ts';
-import { abytes, clean } from './utils.ts';
+import { abytes, ahash, aoutput, clean, type TArg, type TRet } from './utils.ts';
 
 export interface HMACStream {
-  update(msg: Uint8Array): HMACStream;
-  digest(): Uint8Array;
+  canXOF: boolean;
+  update(msg: TArg<Uint8Array>): HMACStream;
+  digest(): TRet<Uint8Array>;
   destroy(): void;
   _cloneInto(to?: HMACStream): HMACStream;
   clone(): HMACStream;
-  digestInto(buf: Uint8Array): void;
+  digestInto(buf: TArg<Uint8Array>): void;
   blockLen: number;
   outputLen: number;
 }
 
+/**
+ * Internal class for HMAC.
+ * Accepts any byte key, although RFC 2104 §3 recommends keys at least
+ * `HashLen` bytes long.
+ */
 class HMAC<T extends HashStream<any>> {
   oHash: any;
   iHash: any;
   blockLen: number;
   outputLen: number;
+  canXOF = false;
   private finished = false;
   private destroyed = false;
 
   constructor(hash: HashInstance<any>, key: Uint8Array) {
+    ahash(hash);
     abytes(key, undefined, 'key');
     this.iHash = hash.create() as T;
     if (typeof this.iHash.update !== 'function')
@@ -37,7 +45,8 @@ class HMAC<T extends HashStream<any>> {
     pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
     for (let i = 0; i < pad.length; i++) pad[i] ^= 0x36;
     this.iHash.update(pad);
-    // By doing update (processing of first block) of outer hash here we can re-use it between multiple calls via clone
+    // Process the first outer block here so clone() can reuse the prepared state
+    // across multiple calls.
     this.oHash = hash.create() as T;
     // Undo internal XOR && apply outer XOR
     for (let i = 0; i < pad.length; i++) pad[i] ^= 0x36 ^ 0x5c;
@@ -51,11 +60,14 @@ class HMAC<T extends HashStream<any>> {
   }
   digestInto(out: Uint8Array): void {
     //aexists(this);
-    abytes(out, this.outputLen, 'output');
+    aoutput(out, this);
     this.finished = true;
-    this.iHash.digestInto(out);
-    this.oHash.update(out);
-    this.oHash.digestInto(out);
+    const buf = out.subarray(0, this.outputLen);
+    // Reuse the first outputLen bytes for the inner digest; the outer hash consumes them before
+    // overwriting that same prefix with the final tag, leaving any oversized tail untouched.
+    this.iHash.digestInto(buf);
+    this.oHash.update(buf);
+    this.oHash.digestInto(buf);
     this.destroy();
   }
   digest(): Uint8Array {
@@ -64,7 +76,8 @@ class HMAC<T extends HashStream<any>> {
     return out;
   }
   _cloneInto(to?: HMAC<T>): HMAC<T> {
-    // Create new instance without calling constructor since key already in state and we don't know it.
+    // Create a new instance without calling the constructor.
+    // The key is already in state and is not available here.
     to ||= Object.create(Object.getPrototypeOf(this), {});
     const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
     to = to as this;
@@ -86,12 +99,23 @@ class HMAC<T extends HashStream<any>> {
   }
 }
 
-export const hmac: {
-  (hash: HashInstance<any>, key: Uint8Array, message: Uint8Array): Uint8Array;
-  create(hash: HashInstance<any>, key: Uint8Array): HMACStream;
-} = /* @__PURE__ */ (() => {
-  const fn = ((hash: HashInstance<any>, key: Uint8Array, message: Uint8Array): Uint8Array =>
-    new HMAC<any>(hash, key).update(message).digest()) as typeof hmac;
-  fn.create = (hash: HashInstance<any>, key: Uint8Array) => new HMAC<any>(hash, key);
+export const hmac: TRet<{
+  (
+    hash: TArg<HashInstance<any>>,
+    key: TArg<Uint8Array>,
+    message: TArg<Uint8Array>
+  ): TRet<Uint8Array>;
+  create(hash: TArg<HashInstance<any>>, key: TArg<Uint8Array>): HMACStream;
+}> = /* @__PURE__ */ (() => {
+  const fn = ((
+    hash: TArg<HashInstance<any>>,
+    key: TArg<Uint8Array>,
+    message: TArg<Uint8Array>
+  ): TRet<Uint8Array> =>
+    new HMAC<any>(hash as HashInstance<any>, key)
+      .update(message)
+      .digest() as TRet<Uint8Array>) as typeof hmac;
+  fn.create = (hash: TArg<HashInstance<any>>, key: TArg<Uint8Array>) =>
+    new HMAC<any>(hash as HashInstance<any>, key) as HMACStream;
   return fn;
 })();
