@@ -127,20 +127,45 @@ for (const hash of [sha256, sha256wasm_threads, sha256js, sha256wc, sha256rn]) {
 }
 ```
 
-5 backends are produced from 1 source code, by awasm-compiler:
+```ts
+// Benchmark blake3
+import { blake3 } from '@awasm/noble/wasm_threads.js';
+async function main() {
+  function hex(bytes) {
+    return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  // warm-up JIT
+  for (let i = 0; i < 20; i++) {
+    blake3.parallel([new Uint8Array(1024 * 1024)]);
+    await Promise.resolve();
+  }
+  // benchmark
+  for (let i = 0; i < 5; i++) {
+    const input = new Uint8Array(1024 * 1024 * 1024).fill(i); // 1GB of 0x00, 0x01, 0x02...
+    const start = Date.now();
+    const res = blake3(input);
+    console.log('hashed 1gb in', Date.now() - start, 'ms, result:', hex(res));
+  }
+}
+main();
+```
+
+4 backends are produced from 1 source code, by awasm-compiler:
 
 1. **wasm:** JS files containing wasm binaries in base64 strings. Requires `wasm-unsafe-eval` CORS policy to work.
 2. **wasm_threads:** identical to wasm, but faster due to web workers. Requires `same-origin` & `require-corp` CORS policies to work.
 3. **js:** JS files without WASM. Extra optimizations (like loop unrolling) are auto-applied, to make everything fast.
-4. **webcrypto:** wraps around built-in `WebCrypto` methods. Async-only.
-5. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Async-only. Depends on `@awasm/compiler`
+4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Async-only. Depends on `@awasm/compiler`
+
+Additionally, **webcrypto** submodule wraps around built-in `WebCrypto` methods. It's async-only.
+
 
 ### Stubs
 
 Stubs allow using one high-level function call, while switching the internal backend
 as needed.
 
-Imagine you have a high-level library ("Awasm-react"). It's not the best idea to use
+Imagine you have a high-level library ("awasm-react"). It's not the best idea to use
 wasm methods there, because users of the library may not want wasm.
 
 Instead, you use stub, with (default) wasm inside. User then is able to switch the env any time
