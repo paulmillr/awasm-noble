@@ -13,8 +13,8 @@
   ],
   "devDependencies": {
     "@awasm/compiler": "0.1.0",
-    "@noble/ciphers": "2.1.1",
-    "@noble/hashes": "2.0.1",
+    "@noble/ciphers": "~2.2.0",
+    "@noble/hashes": "~2.2.0",
     "@paulmillr/jsbt": "0.5.0",
     "@scure/base": "2.0.0",
     "fast-check": "4.5.3",

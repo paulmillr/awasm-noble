@@ -1,7 +1,9 @@
 import { describe, should } from '@paulmillr/jsbt/test.js';
 import { deepStrictEqual as eql } from 'node:assert';
 import { pbkdf2 } from '../../src/kdf.ts';
-import { test } from '../noble-hashes/test/async.test.ts';
+// Shared hash fixtures live under test/hashes/noble-hashes now; `../noble-hashes` points at the
+// test root and breaks direct execution of this file.
+import { test } from './noble-hashes/test/async.test.ts';
 import { PLATFORMS } from '../platforms.ts';
 
 const wrap = ({ sha256, scrypt }) => ({

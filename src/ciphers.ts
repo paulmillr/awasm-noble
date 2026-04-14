@@ -5,7 +5,7 @@
  */
 import type { CipherDef, CipherOpts } from './ciphers-abstract.ts';
 import { ARX_SIGMA16, ARX_SIGMA32 } from './constants.ts';
-import { type Modules } from './modules/index.ts'; // we can import only types here!
+import type { Modules } from './modules/index.ts';
 import type * as TYPES from './targets/types.ts';
 import { abytes, anumber, u32, type TArg, type TRet } from './utils.ts';
 

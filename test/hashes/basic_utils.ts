@@ -59,15 +59,45 @@ export const BUFS = [
 ];
 
 export const HASHES = {};
+const MACS = { cmac: 32, poly1305: 32, ghash: 16, polyval: 16 } as const;
+const wrapHash = (name: string, fn: any) => {
+  const keyLen = MACS[name as keyof typeof MACS];
+  if (!keyLen) return fn;
+  // Shared hash harness is unary; close over a deterministic test key for keyed MAC surfaces.
+  const key = seqU8(keyLen);
+  const call = (msg: Uint8Array, opts = key) => fn(msg, opts);
+  const res = Object.assign(call, fn);
+  res.async = (msg: Uint8Array, opts = key) => fn.async(msg, opts);
+  if (typeof fn.chunks === 'function') {
+    res.chunks = Object.assign(
+      (parts: Uint8Array[], opts = key) => fn.chunks(parts, opts),
+      fn.chunks.async
+        ? { async: (parts: Uint8Array[], opts = key) => fn.chunks.async(parts, opts) }
+        : {}
+    );
+  }
+  if (typeof fn.parallel === 'function') {
+    res.parallel = Object.assign(
+      (parts: Uint8Array[], opts = key) => fn.parallel(parts, opts),
+      fn.parallel.async
+        ? { async: (parts: Uint8Array[], opts = key) => fn.parallel.async(parts, opts) }
+        : {}
+    );
+  }
+  if (typeof fn.create === 'function') res.create = (opts = key) => fn.create(opts);
+  return res;
+};
 const ALL = new Set([...Object.keys(js), ...Object.keys(wasm)]);
 for (const k of ALL) {
   // if (!runtime[k]) continue;
   if (k === 'scrypt' || k.startsWith('argon')) continue;
   if (typeof NOBLE[k]?.create !== 'function') continue;
+  const noble = wrapHash(k, NOBLE[k]);
+  const versions = [js[k], wasm[k] /*js_threads[k]*/, , wasm_threads[k] /*runtime[k]*/]
+    .filter((i) => !!i)
+    .map((i) => wrapHash(k, i));
   HASHES[k] = {
-    noble: NOBLE[k],
-    versions: [js[k], wasm[k] /*js_threads[k]*/, , wasm_threads[k] /*runtime[k]*/].filter(
-      (i) => !!i
-    ),
+    noble,
+    versions,
   };
 }

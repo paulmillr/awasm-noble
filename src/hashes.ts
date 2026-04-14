@@ -6,7 +6,7 @@
 import * as constants from './constants.ts';
 import { type HashDef } from './hashes-abstract.ts';
 import { mkArgon2d, mkArgon2i, mkArgon2id, mkScrypt } from './kdf.ts';
-import { type Modules } from './modules/index.ts'; // we can import only types here!
+import type { Modules } from './modules/index.ts';
 import type * as TYPES from './targets/types.ts';
 import { abytes, anumber, isBytes, oidNist, u32, type TArg, type TRet } from './utils.ts';
 
