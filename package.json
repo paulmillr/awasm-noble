@@ -48,6 +48,8 @@
   },
   "keywords": [
     "wasm",
+    "awasm",
+    "cryptography",
     "sha",
     "sha2",
     "sha3",
@@ -62,7 +64,6 @@
     "keccak",
     "kdf",
     "hash",
-    "cryptography",
     "security",
     "noble"
   ],
@@ -73,9 +74,9 @@
     "url": "git+https://github.com/paulmillr/awasm-noble.git"
   },
   "type": "module",
-  "main": "./targets/wasm/index.js",
-  "module": "./targets/wasm/index.js",
-  "types": "./targets/wasm/index.d.ts",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
   "sideEffects": false,
   "author": "Paul Miller (https://paulmillr.com)",
   "license": "MIT"
