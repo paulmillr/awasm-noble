@@ -127,33 +127,12 @@ for (const hash of [sha256, sha256wasm_threads, sha256js, sha256wc, sha256rn]) {
 }
 ```
 
-```ts
-// Benchmark blake3
-import { blake3 } from '@awasm/noble/wasm_threads.js';
-async function main() {
-  function hex(bytes) {
-    return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
-  }
-  // warm-up JIT
-  for (let i = 0; i < 20; i++) {
-    blake3.parallel([new Uint8Array(1024 * 1024)]);
-    await Promise.resolve();
-  }
-  // benchmark
-  for (let i = 0; i < 5; i++) {
-    const input = new Uint8Array(1024 * 1024 * 1024).fill(i); // 1GB of 0x00, 0x01, 0x02...
-    const start = Date.now();
-    const res = blake3(input);
-    console.log('hashed 1gb in', Date.now() - start, 'ms, result:', hex(res));
-  }
-}
-main();
-```
-
 4 backends are produced from 1 source code, by awasm-compiler:
 
 1. **wasm:** JS files containing wasm binaries in base64 strings. Requires `wasm-unsafe-eval` CORS policy to work.
-2. **wasm_threads:** identical to wasm, but faster due to web workers. Requires `same-origin` & `require-corp` CORS policies to work.
+    - Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js): it contains node.js webserver with proper headers
+2. **wasm_threads:** identical to wasm, but faster due to web workers. Requires `Cross-Origin-Opener-Policy: same-origin` & `Cross-Origin-Embedder-Policy: require-corp` CORS policies to work.
+    - Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js): it contains node.js webserver with proper headers
 3. **js:** JS files without WASM. Extra optimizations (like loop unrolling) are auto-applied, to make everything fast.
 4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Async-only. Depends on `@awasm/compiler`
 
@@ -209,10 +188,36 @@ deepStrictEqual(sha256.parallel([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5
 ]);
 ```
 
+```ts
+// Benchmark blake3
+import { blake3 } from '@awasm/noble/wasm_threads.js';
+async function main() {
+  function hex(bytes) {
+    return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  // warm-up JIT
+  for (let i = 0; i < 20; i++) {
+    blake3.parallel([new Uint8Array(1024 * 1024)]);
+    await Promise.resolve();
+  }
+  // benchmark
+  for (let i = 0; i < 5; i++) {
+    const input = new Uint8Array(1024 * 1024 * 1024).fill(i); // 1GB of 0x00, 0x01, 0x02...
+    const start = Date.now();
+    const res = blake3(input); // or blake3.create().update().digest()
+    console.log('hashed 1gb in', Date.now() - start, 'ms, result:', hex(res));
+  }
+}
+main();
+```
+
 Default backend (WASM) uses SIMD for parallel execution.
 
 `wasm_threads` also use web worker based threads.
-It requires `same-origin` & `require-corp` CORS policies to work.
+It requires `Cross-Origin-Opener-Policy: same-origin` & `Cross-Origin-Embedder-Policy: require-corp`
+CORS policies to work.
+Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js):
+it contains node.js webserver with proper headers
 
 BLAKE3 & most ciphers run very fast in threaded mode. Others
 (e.g. SHA256, AES-CBC) can't parallelize one large input using threads,
