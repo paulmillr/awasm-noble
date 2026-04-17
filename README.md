@@ -10,6 +10,7 @@ Auditable WASM implementation of cryptographic hashes & ciphers.
 - 🔍 Reliable: tests from noble packages, zeroization tests
 - 4️⃣ Different backends: wasm (SIMD), threaded wasm (web workers), JS, runtime
 - 🎫 Stubs: switch between backends based on app needs
+- 🔗 Synchronous by default, with optional async methods
 - 🦘 Includes SHA, RIPEMD, BLAKE, PBKDF, Scrypt, Argon2, Salsa, ChaCha, AES
 - 🪶 Lightweight
 
