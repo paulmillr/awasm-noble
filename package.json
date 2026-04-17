@@ -7,7 +7,6 @@
     "modules",
     "targets",
     "*.js",
-    "*.js.map",
     "*.d.ts",
     "*.d.ts.map"
   ],
@@ -31,14 +30,12 @@
     "test:zeroize": "CHECK_ZEROIZE=1 node test/index.ts"
   },
   "exports": {
-    ".": {
-      "types": "./targets/wasm/index.d.ts",
-      "default": "./targets/wasm/index.js"
-    },
-    "./js.js": "./targets/js/index.js",
-    "./wasm_threads.js": "./targets/wasm_threads/index.js",
-    "./runtime.js": "./targets/runtime/index.js",
-    "./stub.js": "./targets/stub/index.js",
+    ".": "./index.js",
+    "./js.js": "./js.js",
+    "./wasm.js": "./wasm.js",
+    "./wasm_threads.js": "./wasm_threads.js",
+    "./runtime.js": "./runtime.js",
+    "./stub.js": "./stub.js",
     "./kdf.js": "./kdf.js",
     "./hmac.js": "./hmac.js",
     "./hkdf.js": "./hkdf.js",
