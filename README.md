@@ -130,9 +130,9 @@ for (const hash of [sha256, sha256wasm_threads, sha256js, sha256wc, sha256rn]) {
 4 backends are produced from 1 source code, by awasm-compiler:
 
 1. **wasm:** JS files containing wasm binaries in base64 strings. Requires `wasm-unsafe-eval` CORS policy to work.
-    - Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js): it contains node.js webserver with proper headers
+    - Check out [`examples`](./examples) for node.js & vercel example of proper headers
 2. **wasm_threads:** identical to wasm, but faster due to web workers. Requires `Cross-Origin-Opener-Policy: same-origin` & `Cross-Origin-Embedder-Policy: require-corp` CORS policies to work.
-    - Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js): it contains node.js webserver with proper headers
+    - Check out [`examples`](./examples) for node.js & vercel example of proper headers
 3. **js:** JS files without WASM. Extra optimizations (like loop unrolling) are auto-applied, to make everything fast.
 4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Async-only. Depends on `@awasm/compiler`
 
@@ -216,8 +216,7 @@ Default backend (WASM) uses SIMD for parallel execution.
 `wasm_threads` also use web worker based threads.
 It requires `Cross-Origin-Opener-Policy: same-origin` & `Cross-Origin-Embedder-Policy: require-corp`
 CORS policies to work.
-Check out file [`examples/http-server-cors.js`](./examples/http-server-cors.js):
-it contains node.js webserver with proper headers
+Check out [`examples`](./examples) for node.js & vercel example of proper headers.
 
 BLAKE3 & most ciphers run very fast in threaded mode. Others
 (e.g. SHA256, AES-CBC) can't parallelize one large input using threads,
@@ -549,6 +548,8 @@ WP.stop();
 Benchmarks measured on Apple M4.
 
 Prefer `.chunks()` for multiple <1mb inputs. Prefer streaming api `.update()` for >=1mb inputs.
+
+Online benchmark (BLAKE3 checksum calculator) is available on [the demo website hosted on Vercel](https://project-m2e90.vercel.app).
 
 ### wasm_threads
 

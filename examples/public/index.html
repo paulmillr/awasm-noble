@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BLAKE3 checksum calculator with awasm-noble</title>
+  <script src="./bundle.js"></script>
+  <style>
+    html {
+      font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+      line-height: 1.15;
+      -webkit-text-size-adjust: 100%;
+      tab-size: 2;
+    }
+    body {
+      margin: 0;
+      padding: 1rem;
+      box-sizing: border-box;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: inherit;
+    }
+   .uploader {
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    #drop-zone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 200px;
+      padding: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      color: slategray;
+      cursor: pointer;
+      gap: 0.5rem;
+      text-align: center;
+      transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+    #drop-zone.drag-active {
+      border-color: #2563eb;
+      background: #eff6ff;
+      color: #1e40af;
+    }
+    #file-input {
+      margin-top: 0.25rem;
+      max-width: 100%;
+    }
+    #checksums {
+      margin-top: 3rem;
+      border: 1px solid black;
+      border-collapse: collapse;
+      width: 100%;
+    }
+    #checksums thead th {
+      border: 1px solid black;
+      text-align: left;
+      padding: 0.5rem;
+    }
+    #checksums td {
+      border: 1px solid black;
+      min-width: 4ch;
+      max-width: 32ch;
+      word-wrap: anywhere;
+      padding: 0.5rem;
+    }
+    #checksums .last-row {
+      width: 22ch;
+    }
+    .loader {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #d1d5db;
+      border-top-color: #111827;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.5ch;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (max-width: 640px) {
+      body {
+        padding: 0.75rem;
+      }
+      #drop-zone {
+        min-height: 140px;
+      }
+      #checksums {
+        margin-top: 1.5rem;
+      }
+      #checksums td,
+      #checksums th {
+        font-size: 0.875rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="uploader">
+    <h2>BLAKE3 checksum calculator</h2>
+    <p>Offline, pure JS, using <a href="https://github.com/paulmillr/awasm-noble">awasm-noble</a>.</p>
+  <label id="drop-zone" tabindex="0" aria-label="Drop files here or choose files to upload">
+  <span id="drop-hint">Drop files here, or click to upload.</span>
+  <input type="file" id="file-input" multiple aria-label="Select files to checksum" />
+  </label>
+  <br/>
+  <table id="checksums">
+    <thead>
+      <th>Name</th>
+      <th>Size</th>
+      <th>Time</th>
+      <th>Speed</th>
+      <th>Checksum</th>
+    </thead>
+    <tbody>
+      <tr id="placeholder">
+        <td colspan="5" style="text-align: center;">No files</td>
+      </tr>
+    </tbody>
+  </table>
+  <div id="file-checksum"></div>
+  </div>
+
+  <script>
+    const warmup = async () => {
+      // warm-up JIT
+      // unused for now
+      for (let i = 0; i < 20; i++) {
+        blake3.parallel([new Uint8Array(1024 * 1024)]);
+        await Promise.resolve();
+      }
+    };
+    const fileInput = document.querySelector('#file-input');
+    const dropZone = document.querySelector('#drop-zone');
+    const dropHint = document.querySelector('#drop-hint');
+    const defaultDropHint = 'Drop files here, or click to upload.';
+    const _1mb = 1024 * 1024;
+    const _1sec = 1000;
+    function calcSpeed(size, ms) {
+      if (ms <= 0) return '';
+      const sec = (ms) / _1sec;
+      const perSec = size / sec;
+      return `${humanSize(perSec)}/s`;
+    }
+    function humanSize(size) {
+      if (size < 1024) return `${size} B`;
+      if (size < 1024 ** 2) return `${(size / 1024).toFixed(2)} KB`;
+      if (size < 1024 ** 3) return `${(size / (1024 ** 2)).toFixed(2)} MB`;
+      return `${(size / (1024 ** 3)).toFixed(2)} GB`;
+    }
+    function humanDiff(diff) {
+      if (diff > _1sec) return `${(diff / _1sec).toFixed(2)} sec`;
+      return `${diff} ms`;
+    }
+    function hex(bytes) {
+      console.log(typeof bytes, bytes);
+      return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    function createEntry(file) {
+      const placeholder = document.querySelector('#placeholder');
+      if (placeholder) placeholder.remove();
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="last-row"></td>
+      `.trim();
+      row.children[0].textContent = file.name;
+      row.children[1].textContent = humanSize(file.size);
+      row.children[4].innerHTML = '<span class="loader" aria-hidden="true"></span><span role="status" aria-live="polite">Calculating...</span>';
+      checksums.querySelector('tbody').append(row);
+      return row;
+    }
+    function completeEntry(row, file, checksum, diff) {
+      row.children[2].textContent = humanDiff(diff);
+      row.children[3].textContent = calcSpeed(file.size, diff);
+      row.children[4].innerHTML = `<code>${hex(checksum)}</code>`;
+    }
+    function failEntry(row, message = 'Failed') {
+      row.children[4].textContent = message;
+    }
+
+    async function stream(file) {
+      const row = createEntry(file);
+      if (file.size < 10 * _1mb) {
+        await new Promise((resolve) => {
+          const reader = new FileReader();
+          const start = Date.now();
+          reader.onload = async (e) => {
+            try {
+              const checksum = await app.blake3(new Uint8Array(e.target.result));
+              const finish = Date.now();
+              completeEntry(row, file, checksum, finish - start);
+            } catch (_) {
+              failEntry(row);
+            } finally {
+              resolve();
+            }
+          };
+          reader.onerror = () => {
+            failEntry(row);
+            resolve();
+          };
+          reader.readAsArrayBuffer(file);
+        });
+        return;
+      }
+      try {
+        const hash = app.blake3.create();
+        const supportsBYOB = 'ReadableStreamBYOBReader' in globalThis; // faster
+        const reader = file.stream().getReader(supportsBYOB ? {mode: 'byob'} : undefined);
+        let tmp = new ArrayBuffer(10 * _1mb);
+        const start = Date.now();
+        while (true) {
+          const { value, done } = await reader.read(supportsBYOB ? new Uint8Array(tmp) : undefined);
+          if (done) {
+            const finish = Date.now();
+            const checksum = hash.digest();
+            completeEntry(row, file, checksum, finish - start);
+            break;
+          }
+          if (supportsBYOB) tmp = value.buffer;
+          hash.update(value);
+        }
+      } catch (_) {
+        failEntry(row);
+      }
+    }
+
+    function getFilesSummary(files) {
+      const list = Array.from(files || []).filter(Boolean);
+      const count = list.length;
+      const size = list.reduce((sum, file) => sum + (file.size || 0), 0);
+      return { count, size };
+    }
+
+    function fileLabel(count) {
+      return `${count} file${count === 1 ? '' : 's'}`;
+    }
+
+    function updateDropHint(dataTransfer) {
+      const files = Array.from(dataTransfer?.files || []);
+      if (files.length) {
+        const { count, size } = getFilesSummary(files);
+        dropHint.textContent = `${fileLabel(count)} • ${humanSize(size)}`;
+        return;
+      }
+      const items = Array.from(dataTransfer?.items || []).filter((item) => item.kind === 'file');
+      if (items.length) {
+        const itemFiles = items.map((item) => item.getAsFile()).filter(Boolean);
+        const { count, size } = getFilesSummary(itemFiles);
+        const visibleCount = count || items.length;
+        dropHint.textContent = size > 0
+          ? `${fileLabel(visibleCount)} • ${humanSize(size)}`
+          : `${fileLabel(visibleCount)} ready`;
+        return;
+      }
+      dropHint.textContent = 'Drop files to calculate checksums';
+    }
+
+    function resetDropHint() {
+      dropZone.classList.remove('drag-active');
+      dropHint.textContent = defaultDropHint;
+    }
+
+    async function processFiles(files) {
+      const list = Array.from(files || []);
+      if (!list.length) return;
+      await Promise.allSettled(list.map((file) => stream(file)));
+      fileInput.value = '';
+    }
+
+    fileInput.addEventListener('change', (event) => {
+      void processFiles(event.target.files);
+    });
+
+    document.addEventListener('dragover', (event) => event.preventDefault());
+    document.addEventListener('drop', (event) => {
+      event.preventDefault();
+    });
+
+    let dragDepth = 0;
+    dropZone.addEventListener('dragenter', (event) => {
+      event.preventDefault();
+      dragDepth += 1;
+      dropZone.classList.add('drag-active');
+      updateDropHint(event.dataTransfer);
+    });
+    dropZone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      dropZone.classList.add('drag-active');
+      updateDropHint(event.dataTransfer);
+    });
+    dropZone.addEventListener('dragleave', (event) => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) resetDropHint();
+    });
+    dropZone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      resetDropHint();
+      void processFiles(event.dataTransfer.files);
+    });
+    document.addEventListener('dragend', () => {
+      dragDepth = 0;
+      resetDropHint();
+    });
+    dropZone.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        fileInput.click();
+      }
+    });
+  </script>
+</body>
+</html>
