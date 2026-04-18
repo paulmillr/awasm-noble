@@ -15,10 +15,14 @@ import {
   type TRet,
 } from './utils.ts';
 
+/** Configured cipher instance with one-shot encrypt/decrypt helpers. */
 export type Cipher = {
+  /** Encrypt plaintext bytes and optionally write into the provided output buffer. */
   encrypt(plaintext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
+  /** Decrypt ciphertext bytes and optionally write into the provided output buffer. */
   decrypt(ciphertext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
 };
+/** Cipher constructor plus metadata exposed on public wrappers. */
 export type CipherFactory = ((key: TArg<Uint8Array>, ...args: unknown[]) => TRet<Cipher>) & {
   blockSize: number;
   blockLen: number;
@@ -75,6 +79,7 @@ type CipherMod = {
   verifyPadding?(take: number, blockLen: number): number;
 };
 
+/** Low-level cipher definition consumed by {@link mkCipher}. */
 export type CipherDef<Mod> = CipherParams & {
   tagLeft?: boolean;
   dataOffset?: number;

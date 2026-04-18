@@ -124,6 +124,16 @@ const assertLE = (littleEndian = isLE) => {
 assertLE();
 
 /** Checks if something is Uint8Array. Be careful: nodejs Buffer will return true. */
+/**
+ * Checks whether a value is a byte-oriented Uint8Array view.
+ * @param a - value to inspect.
+ * @returns True when the value is a Uint8Array-compatible byte view.
+ * @example
+ * ```ts
+ * import { isBytes } from '@awasm/noble/utils.js';
+ * isBytes(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export function isBytes(a: unknown): a is Uint8Array {
   // Plain `instanceof Uint8Array` is too strict for some Buffer / proxy / cross-realm cases.
   // The fallback still requires a real ArrayBuffer view, so plain
@@ -138,12 +148,32 @@ export function isBytes(a: unknown): a is Uint8Array {
   );
 }
 
-/** Asserts something is boolean. */
+/**
+ * Asserts something is boolean.
+ * @param b - value to validate.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { abool } from '@awasm/noble/utils.js';
+ * abool(true);
+ * ```
+ */
 export function abool(b: boolean): void {
   if (typeof b !== 'boolean') throw new TypeError(`boolean expected, not ${b}`);
 }
 
-/** Asserts something is a non-negative safe integer. */
+/**
+ * Asserts something is a non-negative safe integer.
+ * @param n - value to validate.
+ * @param title - optional field name for error messages.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * ```ts
+ * import { anumber } from '@awasm/noble/utils.js';
+ * anumber(7, 'count');
+ * ```
+ */
 export function anumber(n: number, title: string = ''): void {
   const prefix = title && `"${title}" `;
   if (typeof n !== 'number') throw new TypeError(`${prefix}expected number, got ${typeof n}`);
@@ -152,7 +182,20 @@ export function anumber(n: number, title: string = ''): void {
   }
 }
 
-/** Asserts something is Uint8Array. */
+/**
+ * Asserts something is Uint8Array.
+ * @param value - byte array candidate.
+ * @param length - optional exact length requirement.
+ * @param title - optional field name for error messages.
+ * @returns The validated byte array.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * ```ts
+ * import { abytes } from '@awasm/noble/utils.js';
+ * abytes(new Uint8Array([1, 2, 3]), 3, 'msg');
+ * ```
+ */
 export function abytes(
   value: TArg<Uint8Array>,
   length?: number,
@@ -170,13 +213,34 @@ export function abytes(
   return value as TRet<Uint8Array>;
 }
 
-/** Asserts a hash instance has not been destroyed / finished */
+/**
+ * Asserts a hash-like instance has not been destroyed or finished.
+ * @param instance - instance to validate.
+ * @param checkFinished - whether to reject already-finished instances.
+ * @throws If the documented runtime validation or state check fails. {@link Error}
+ * @example
+ * ```ts
+ * import { aexists } from '@awasm/noble/utils.js';
+ * aexists({ destroyed: false, finished: false });
+ * ```
+ */
 export function aexists(instance: any, checkFinished = true): void {
   if (instance.destroyed) throw new Error('Hash instance has been destroyed');
   if (checkFinished && instance.finished) throw new Error('Hash#digest() has already been called');
 }
 
-/** Asserts output is properly-sized byte array */
+/**
+ * Asserts an output buffer is a byte array with sufficient capacity.
+ * @param out - destination buffer.
+ * @param instance - object exposing `outputLen`.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * ```ts
+ * import { aoutput } from '@awasm/noble/utils.js';
+ * aoutput(new Uint8Array(32), { outputLen: 32 });
+ * ```
+ */
 export function aoutput(out: any, instance: any): void {
   abytes(out, undefined, 'output');
   const min = instance.outputLen;
@@ -187,6 +251,19 @@ export function aoutput(out: any, instance: any): void {
   }
 }
 
+/**
+ * Asserts a hash surface looks like one produced by the hash factory.
+ * @param h - hash surface to validate.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @throws If a documented runtime validation or state check fails. {@link Error}
+ * @example
+ * ```ts
+ * import { sha256 } from '@awasm/noble';
+ * import { ahash } from '@awasm/noble/utils.js';
+ * ahash(sha256);
+ * ```
+ */
 export function ahash(h: TArg<HashInstance<any>>): void {
   if (typeof h !== 'function' || typeof h.create !== 'function')
     throw new TypeError('Hash must created by hashes.mkHash');
@@ -203,14 +280,32 @@ export function ahash(h: TArg<HashInstance<any>>): void {
 export type TypedArray = Int8Array | Uint8ClampedArray | Uint8Array |
   Uint16Array | Int16Array | Uint32Array | Int32Array;
 
-/** Cast u8 / u16 / u32 to u8. */
-// Shared buffer view in native memory order; used for internal state init, not endian-normalized serialization.
+/**
+ * Casts a typed-array view to bytes over the same memory region.
+ * Shared buffer view in native memory order; used for internal state init, not endian-normalized serialization.
+ * @param arr - source typed-array view.
+ * @returns Byte view over the same buffer region.
+ * @example
+ * ```ts
+ * import { u8 } from '@awasm/noble/utils.js';
+ * u8(new Uint32Array([1]));
+ * ```
+ */
 export function u8(arr: TArg<TypedArray>): TRet<Uint8Array> {
   return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength) as TRet<Uint8Array>;
 }
 
-/** Cast u8 / u16 / u32 to u32. */
-// Shared native-order word view; byteOffset must be 4-byte aligned and trailing 1..3 bytes are ignored.
+/**
+ * Casts a typed-array view to 32-bit words over the same memory region.
+ * Shared native-order word view; byteOffset must be 4-byte aligned and trailing 1..3 bytes are ignored.
+ * @param arr - source typed-array view.
+ * @returns Uint32Array view over the same buffer region.
+ * @example
+ * ```ts
+ * import { u32 } from '@awasm/noble/utils.js';
+ * u32(new Uint8Array([1, 2, 3, 4]));
+ * ```
+ */
 export function u32(arr: TArg<TypedArray>): TRet<Uint32Array> {
   return new Uint32Array(
     arr.buffer,
@@ -219,7 +314,16 @@ export function u32(arr: TArg<TypedArray>): TRet<Uint32Array> {
   ) as TRet<Uint32Array>;
 }
 
-/** Zeroize a byte array. Warning: JS provides no guarantees. */
+/**
+ * Zeroize typed arrays in place. Warning: JS provides no guarantees.
+ * @param arrays - arrays to overwrite with zeros.
+ * @example
+ * ```ts
+ * import { clean } from '@awasm/noble/utils.js';
+ * const buf = new Uint8Array([1, 2, 3]);
+ * clean(buf);
+ * ```
+ */
 export function clean(...arrays: TArg<TypedArray[]>): void {
   for (let i = 0; i < arrays.length; i++) {
     arrays[i].fill(0);
@@ -228,6 +332,16 @@ export function clean(...arrays: TArg<TypedArray[]>): void {
 
 // JS `.fill(0)` can be surprisingly slow on large buffers; chunked `.set` tends to be faster.
 // This is used by ciphers to clear large staging buffers without making perf unusable.
+/**
+ * Fast zeroization for large byte buffers.
+ * @param dst - destination buffer.
+ * @param len - prefix length to clear.
+ * @example
+ * ```ts
+ * import { cleanFast } from '@awasm/noble/utils.js';
+ * cleanFast(new Uint8Array(16), 8);
+ * ```
+ */
 export const cleanFast = (() => {
   let zero: Uint8Array | undefined;
   return (dst: TArg<Uint8Array>, len: number = dst.length): void => {
@@ -244,14 +358,32 @@ export const cleanFast = (() => {
   };
 })();
 
-/** Create a DataView over the same buffer region; writes through it mutate the original array. */
+/**
+ * Create a DataView over the same buffer region; writes through it mutate the original array.
+ * @param arr - source typed-array view.
+ * @returns DataView over the same buffer region.
+ * @example
+ * ```ts
+ * import { createView } from '@awasm/noble/utils.js';
+ * createView(new Uint8Array(8));
+ * ```
+ */
 export function createView(arr: TArg<TypedArray>): DataView {
   return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 }
 
 /**
- * Checks if two U8A use same underlying buffer and overlaps.
+ * Checks if two byte arrays overlap in the same underlying buffer.
  * This is invalid and can corrupt data.
+ * @param a - first byte view.
+ * @param b - second byte view.
+ * @returns True when the byte ranges overlap.
+ * @example
+ * ```ts
+ * import { overlapBytes } from '@awasm/noble/utils.js';
+ * const buf = new Uint8Array(8);
+ * overlapBytes(buf.subarray(0, 4), buf.subarray(2, 6));
+ * ```
  */
 export function overlapBytes(a: TArg<Uint8Array>, b: TArg<Uint8Array>): boolean {
   // Zero-length views cannot overwrite anything, even if their offset sits inside another range.
@@ -263,7 +395,7 @@ export function overlapBytes(a: TArg<Uint8Array>, b: TArg<Uint8Array>): boolean 
   );
 }
 
-export const __TEST = { assertLE };
+export const __TEST = /* @__PURE__ */ Object.freeze({ assertLE });
 
 // Built-in hex conversion https://caniuse.com/mdn-javascript_builtins_uint8array_fromhex
 const hasHexBuiltin: boolean = /* @__PURE__ */ (() =>
@@ -277,7 +409,14 @@ const hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) =>
 
 /**
  * Convert byte array to hex string. Uses built-in function, when available.
- * @example bytesToHex(Uint8Array.from([0xca, 0xfe, 0x01, 0x23])) // 'cafe0123'
+ * @param bytes - bytes to encode.
+ * @returns Lowercase hex string.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { bytesToHex } from '@awasm/noble/utils.js';
+ * bytesToHex(Uint8Array.from([0xca, 0xfe, 0x01, 0x23]));
+ * ```
  */
 export function bytesToHex(bytes: TArg<Uint8Array>): string {
   abytes(bytes);
@@ -302,7 +441,15 @@ function asciiToBase16(ch: number): number | undefined {
 
 /**
  * Convert hex string to byte array. Uses built-in function, when available.
- * @example hexToBytes('cafe0123') // Uint8Array.from([0xca, 0xfe, 0x01, 0x23])
+ * @param hex - hex string to decode.
+ * @returns Decoded bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * ```ts
+ * import { hexToBytes } from '@awasm/noble/utils.js';
+ * hexToBytes('cafe0123');
+ * ```
  */
 export function hexToBytes(hex: string): TRet<Uint8Array> {
   if (typeof hex !== 'string') throw new TypeError('hex string expected, got ' + typeof hex);
@@ -338,10 +485,20 @@ export function hexToBytes(hex: string): TRet<Uint8Array> {
  * Call of async fn will return Promise, which will be fullfiled only on
  * next scheduler queue processing step and this is exactly what we need.
  * This yields to the Promise/microtask scheduler queue, not to timers or the full macrotask event loop.
+ * @example
+ * ```ts
+ * import { nextTick } from '@awasm/noble/utils.js';
+ * await nextTick();
+ * ```
  */
 export const nextTick = async (): Promise<void> => {};
 
-/** Returns control to the Promise/microtask scheduler every `tick` ms to avoid blocking long loops. */
+/**
+ * Returns control to the Promise/microtask scheduler every `tick` ms to avoid blocking long loops.
+ * @param iters - number of loop iterations.
+ * @param tick - maximum milliseconds to spend before yielding.
+ * @param cb - callback invoked for each iteration index.
+ */
 export async function asyncLoop(
   iters: number,
   tick: number,
@@ -366,7 +523,14 @@ declare const TextDecoder: any;
  * Converts string to bytes using UTF8 encoding.
  * Built-in doesn't validate input to be string: we do the check.
  * Non-ASCII details are delegated to the platform TextEncoder.
- * @example utf8ToBytes('abc') // Uint8Array.from([97, 98, 99])
+ * @param str - string to encode.
+ * @returns UTF-8 bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { utf8ToBytes } from '@awasm/noble/utils.js';
+ * utf8ToBytes('abc');
+ * ```
  */
 export function utf8ToBytes(str: string): TRet<Uint8Array> {
   if (typeof str !== 'string') throw new TypeError('string expected');
@@ -377,13 +541,28 @@ export function utf8ToBytes(str: string): TRet<Uint8Array> {
  * Convert byte array to string, assuming UTF8 encoding.
  * Input validation and malformed-sequence handling are delegated to TextDecoder:
  * invalid UTF-8 is replacement-decoded, not rejected.
- * @example bytesToUtf8(new Uint8Array([97, 98, 99])) // 'abc'
+ * @param bytes - bytes to decode.
+ * @returns UTF-8 string.
+ * @example
+ * ```ts
+ * import { bytesToUtf8 } from '@awasm/noble/utils.js';
+ * bytesToUtf8(new Uint8Array([97, 98, 99]));
+ * ```
  */
 export function bytesToUtf8(bytes: TArg<Uint8Array>): string {
   return new TextDecoder().decode(bytes);
 }
 
-// Is byte array aligned to 4 byte offset (u32)?
+/**
+ * Checks whether a byte array is aligned to a 4-byte offset.
+ * @param bytes - byte view to inspect.
+ * @returns True when the view is 32-bit aligned.
+ * @example
+ * ```ts
+ * import { isAligned32 } from '@awasm/noble/utils.js';
+ * isAligned32(new Uint8Array(8));
+ * ```
+ */
 export function isAligned32(bytes: TArg<Uint8Array>): boolean {
   return bytes.byteOffset % 4 === 0;
 }
@@ -391,6 +570,17 @@ export function isAligned32(bytes: TArg<Uint8Array>): boolean {
 /**
  * By default, returns u8a of expected length.
  * When `out` is specified, it checks it for validity and uses it.
+ * @param expectedLength - expected output length in bytes.
+ * @param out - optional caller-provided destination buffer.
+ * @param onlyAligned - whether to require 32-bit alignment for `out`.
+ * @returns Output buffer with the expected length.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws If a documented runtime validation or state check fails. {@link Error}
+ * @example
+ * ```ts
+ * import { getOutput } from '@awasm/noble/utils.js';
+ * getOutput(16);
+ * ```
  */
 export function getOutput(
   expectedLength: number,
@@ -412,6 +602,17 @@ export function getOutput(
  * Encodes the AEAD length block as aadLength || dataLength.
  * Callers pass lengths already scaled to the mode's unit:
  * octets for ChaCha20-Poly1305, bits for GCM/GCM-SIV.
+ * @param dataLength - encoded data length.
+ * @param aadLength - encoded AAD length.
+ * @param isLE - whether to write values in little-endian order.
+ * @returns Encoded 16-byte length block.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @example
+ * ```ts
+ * import { u64Lengths } from '@awasm/noble/utils.js';
+ * u64Lengths(16, 8, true);
+ * ```
  */
 export function u64Lengths(dataLength: number, aadLength: number, isLE: boolean): TRet<Uint8Array> {
   // Reject coercible non-number lengths like '10' and true before BigInt(...) accepts them.
@@ -431,13 +632,32 @@ export type KDFInput = string | Uint8Array;
 /**
  * Helper for KDFs: consumes Uint8Array or string.
  * String inputs are UTF-8 encoded; byte-array inputs stay aliased to the caller buffer.
+ * @param data - string or bytes input.
+ * @param errorTitle - optional field name for byte validation.
+ * @returns Byte representation of the input.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { kdfInputToBytes } from '@awasm/noble/utils.js';
+ * kdfInputToBytes('password');
+ * ```
  */
 export function kdfInputToBytes(data: TArg<KDFInput>, errorTitle = ''): TRet<Uint8Array> {
   if (typeof data === 'string') return utf8ToBytes(data);
   return abytes(data, undefined, errorTitle);
 }
 
-/** Copies several Uint8Arrays into one. */
+/**
+ * Copies several Uint8Arrays into one.
+ * @param arrays - arrays to concatenate.
+ * @returns Concatenated bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { concatBytes } from '@awasm/noble/utils.js';
+ * concatBytes(new Uint8Array([1]), new Uint8Array([2, 3]));
+ * ```
+ */
 export function concatBytes(...arrays: TArg<Uint8Array[]>): TRet<Uint8Array> {
   let sum = 0;
   for (let i = 0; i < arrays.length; i++) {
@@ -458,6 +678,17 @@ export function concatBytes(...arrays: TArg<Uint8Array[]>): TRet<Uint8Array> {
  * Fast copy for validated, in-bounds byte ranges.
  * Overlap is intentionally unsupported here for speed: hot callers only pass disjoint ranges,
  * and same-buffer moves must use copyWithin()/set() at the call site instead.
+ * @param dst - destination byte array.
+ * @param dstPos - write offset in destination.
+ * @param src - source byte array.
+ * @param srcPos - read offset in source.
+ * @param len - number of bytes to copy.
+ * @example
+ * ```ts
+ * import { copyFast } from '@awasm/noble/utils.js';
+ * const dst = new Uint8Array(4);
+ * copyFast(dst, 1, new Uint8Array([7, 8]), 0, 2);
+ * ```
  */
 export function copyFast(
   dst: TArg<Uint8Array>,
@@ -475,6 +706,17 @@ export function copyFast(
  * Fast copy for validated, in-bounds 32-bit word ranges.
  * Overlap is intentionally unsupported here for speed: hot callers only pass disjoint ranges,
  * and same-buffer moves must use copyWithin()/set() at the call site instead.
+ * @param dst - destination word array.
+ * @param dstPos - write offset in destination.
+ * @param src - source word array.
+ * @param srcPos - read offset in source.
+ * @param len - number of words to copy.
+ * @example
+ * ```ts
+ * import { copyFast32 } from '@awasm/noble/utils.js';
+ * const dst = new Uint32Array(4);
+ * copyFast32(dst, 1, new Uint32Array([7, 8]), 0, 2);
+ * ```
  */
 export function copyFast32(
   dst: TArg<Uint32Array>,
@@ -491,6 +733,14 @@ export function copyFast32(
 /**
  * Callers must pass a validated byte array; Uint8Array.from() would otherwise coerce arbitrary iterables.
  * Copies into a detached Uint8Array instead of using slice(), because Buffer.slice() aliases memory.
+ * @param bytes - bytes to copy.
+ * @returns Detached copy of the input bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { copyBytes } from '@awasm/noble/utils.js';
+ * copyBytes(new Uint8Array([1, 2, 3]));
+ * ```
  */
 export function copyBytes(bytes: TArg<Uint8Array>): TRet<Uint8Array> {
   // `Uint8Array.from(...)` would also accept arrays / other typed arrays. Keep this helper strict
@@ -502,6 +752,13 @@ export function copyBytes(bytes: TArg<Uint8Array>): TRet<Uint8Array> {
  * Creates OID opts for NIST hashes, with prefix 06 09 60 86 48 01 65 03 04 02.
  * Current callers pass one-byte hashAlgs suffixes for 2.16.840.1.101.3.4.2.<suffix>,
  * so the DER length byte stays 0x09.
+ * @param suffix - final OID suffix byte.
+ * @returns DER-encoded OID bytes.
+ * @example
+ * ```ts
+ * import { oidNist } from '@awasm/noble/utils.js';
+ * oidNist(1);
+ * ```
  */
 export const oidNist = (suffix: number) =>
   Uint8Array.from([
@@ -522,6 +779,15 @@ type EmptyObj = {};
 /**
  * Merges default options and passed options.
  * This mutates `defaults`, so callers pass fresh defaults when they need reuse.
+ * @param defaults - default option object.
+ * @param opts - caller-provided overrides.
+ * @returns Merged options object.
+ * @throws On wrong argument types. {@link TypeError}
+ * @example
+ * ```ts
+ * import { checkOpts } from '@awasm/noble/utils.js';
+ * checkOpts({ a: 1 }, { b: 2 });
+ * ```
  */
 export function checkOpts<T1 extends EmptyObj, T2 extends EmptyObj>(
   defaults: T1,
@@ -537,27 +803,58 @@ export function checkOpts<T1 extends EmptyObj, T2 extends EmptyObj>(
 Make sync/async versions from the same generator body.
 Used by KDFs, hash async wrappers, and cipher async wrappers.
 */
+/** Async execution options shared by generator-backed wrappers. */
 export type AsyncOpts = {
+  /** Total number of progress units for the run. */
   total: number;
-  asyncTick?: number; // block execution max time
+  /** Maximum time in ms before yielding control in async mode. */
+  asyncTick?: number;
+  /**
+   * Optional progress callback receiving values in the `[0, 1]` range.
+   * @param progress - normalized progress value in the `[0, 1]` range.
+   */
   onProgress?: (progress: number) => void;
-  // state management
+  /** Optional serialized-state size in bytes for resumable async work. */
   stateBytes?: number;
+  /**
+   * Save callback for resumable async work.
+   * @param state - serialized algorithm state bytes.
+   */
   save?: (state: Uint8Array) => void;
+  /**
+   * Restore callback for resumable async work.
+   * @param state - serialized algorithm state bytes.
+   */
   restore?: (state: Uint8Array) => void;
-  // allow overriding if more complex scheduling needed
+  /** Optional scheduler override used instead of the default microtask tick. */
   nextTick?: () => Promise<void>;
 };
 
-// Common async-call options for APIs that expose `.async(...)`.
+/** Common async-call options for APIs that expose `.async(...)`. */
 export type AsyncRunOpts = Pick<AsyncOpts, 'asyncTick' | 'onProgress' | 'nextTick'>;
 
+/** Factory that turns per-call async options into a progress/yield callback. */
 export type AsyncSetup = (opts: AsyncOpts) => (inc?: number) => boolean;
 type AsyncSetupMode = AsyncSetup & { isAsync?: boolean };
+/** Function with a matching `.async(...)` variant. */
 export type AsyncFn<T extends any[], R> = ((...args: T) => R) & {
   async: (...args: T) => Promise<R>;
 };
+/** Converts a sync function shape into a sync + async callable shape. */
 export type Asyncify<F extends (...args: any[]) => any> = AsyncFn<Parameters<F>, ReturnType<F>>;
+/**
+ * Build sync and async wrappers from the same generator body.
+ * @param cb_ - generator callback shared by sync and async variants.
+ * @returns Function exposing both sync and `.async(...)` entrypoints.
+ * @example
+ * ```ts
+ * import { mkAsync } from '@awasm/noble/utils.js';
+ * const twice = mkAsync(function* (_setup, value: number) {
+ *   return value * 2;
+ * });
+ * await twice.async(2);
+ * ```
+ */
 export function mkAsync<T extends any[], R>(
   cb_: TArg<(setup: AsyncSetup, ...args: T) => Generator<unknown, R, unknown>>
 ): AsyncFn<T, R> {
@@ -728,6 +1025,14 @@ export function mkAsync<T extends any[], R>(
 /**
  * Compares two byte arrays in kinda constant time once lengths already match.
  * Different lengths return false immediately.
+ * @param a - first byte array.
+ * @param b - second byte array.
+ * @returns True when the byte arrays are equal.
+ * @example
+ * ```ts
+ * import { equalBytes } from '@awasm/noble/utils.js';
+ * equalBytes(new Uint8Array([1, 2]), new Uint8Array([1, 2]));
+ * ```
  */
 export function equalBytes(a: TArg<Uint8Array>, b: TArg<Uint8Array>): boolean {
   if (a.length !== b.length) return false;
@@ -736,7 +1041,19 @@ export function equalBytes(a: TArg<Uint8Array>, b: TArg<Uint8Array>): boolean {
   return diff === 0;
 }
 
-/** Cryptographically secure PRNG. Uses internal OS-level `crypto.getRandomValues`. */
+/**
+ * Cryptographically secure PRNG. Uses internal OS-level `crypto.getRandomValues`.
+ * @param bytesLength - number of random bytes to generate.
+ * @returns Random bytes.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
+ * @throws If a documented runtime validation or state check fails. {@link Error}
+ * @example
+ * ```ts
+ * import { randomBytes } from '@awasm/noble/utils.js';
+ * randomBytes(16);
+ * ```
+ */
 export function randomBytes(bytesLength = 32): TRet<Uint8Array> {
   // Validate upfront so fractional / coercible lengths do not silently
   // truncate through Uint8Array().
@@ -749,13 +1066,25 @@ export function randomBytes(bytesLength = 32): TRet<Uint8Array> {
 
 /** Sync cipher: takes byte array and returns byte array. */
 export type Cipher = {
+  /** Encrypt plaintext bytes. */
   encrypt(plaintext: TArg<Uint8Array>): TRet<Uint8Array>;
+  /** Decrypt ciphertext bytes. */
   decrypt(ciphertext: TArg<Uint8Array>): TRet<Uint8Array>;
 };
 
 /** Async cipher e.g. from built-in WebCrypto. */
 export type AsyncCipher = {
+  /**
+   * Encrypt plaintext bytes asynchronously.
+   * @param plaintext - plaintext bytes to encrypt.
+   * @returns Promise resolving to ciphertext bytes.
+   */
   encrypt(plaintext: TArg<Uint8Array>): Promise<TRet<Uint8Array>>;
+  /**
+   * Decrypt ciphertext bytes asynchronously.
+   * @param ciphertext - ciphertext bytes to decrypt.
+   * @returns Promise resolving to plaintext bytes.
+   */
   decrypt(ciphertext: TArg<Uint8Array>): Promise<TRet<Uint8Array>>;
 };
 
@@ -773,10 +1102,12 @@ type RemoveNonceInner<T extends any[], Ret> = ((...args: T) => Ret) extends (
   ? (key: Uint8Array, ...args: R) => Ret
   : never;
 
+/** Removes the nonce parameter from a nonce-taking cipher factory type. */
 export type RemoveNonce<T extends (...args: any) => any> = RemoveNonceInner<
   Parameters<T>,
   ReturnType<T>
 >;
+/** Cipher factory shape that accepts `(key, nonce, ...args)`. */
 export type CipherWithNonce = ((
   key: TArg<Uint8Array>,
   nonce: TArg<Uint8Array>,
@@ -800,10 +1131,19 @@ export type CipherWithNonce = ((
  * should be limited to `2**23` (8M) messages to get a collision chance of
  * `2**-50`. Stretching to `2**32` (4B) messages would raise that chance to
  * `2**-33`, still negligible but creeping up.
+ * @param fn - nonce-taking cipher factory.
+ * @param randomBytes_ - CSPRNG used to generate nonces.
+ * @returns Cipher factory that prepends managed nonces to ciphertext.
+ * @throws On wrong argument types. {@link TypeError}
+ * @throws On wrong argument ranges or values. {@link RangeError}
  * @example
- * const gcm = managedNonce(aes.gcm);
- * const ciphr = gcm(key).encrypt(data);
- * const plain = gcm(key).decrypt(ciph);
+ * ```ts
+ * import { managedNonce } from '@awasm/noble/utils.js';
+ * import { xchacha20poly1305 } from '@awasm/noble';
+ * const cipher = managedNonce(xchacha20poly1305)(new Uint8Array(32));
+ * const sealed = cipher.encrypt(new Uint8Array([1, 2, 3]));
+ * cipher.decrypt(sealed);
+ * ```
  */
 export function managedNonce<T extends CipherWithNonce>(
   fn: T,

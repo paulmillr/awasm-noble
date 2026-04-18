@@ -2,9 +2,20 @@
  * Small wrappers over native WebCrypto.
  * @module
  */
-import { mkCipherAsync, type CipherFactory } from './ciphers-abstract.ts';
+import {
+  mkCipherAsync,
+  type Cipher,
+  type CipherDef,
+  type CipherFactory,
+} from './ciphers-abstract.ts';
 import { cbc as def_cbc, ctr as def_ctr, gcm as def_gcm } from './ciphers.ts';
-import { mkHashAsync, type HashInstance } from './hashes-abstract.ts';
+import {
+  mkHashAsync,
+  type HashDef,
+  type HashInstance,
+  type HashStream,
+  type OutputOpts,
+} from './hashes-abstract.ts';
 import {
   sha1 as def_sha1,
   sha224 as def_sha224,
@@ -23,10 +34,13 @@ import {
   checkOpts,
   clean,
   kdfInputToBytes,
+  type Asyncify,
   type KDFInput,
   type TArg,
   type TRet,
 } from './utils.ts';
+export type { OutputOpts, HashStream, HashDef, Asyncify, Cipher, CipherDef };
+
 type WebHash<Opts = any> = TRet<HashInstance<Opts>> & {
   isSupported: () => Promise<boolean>;
   webCryptoName: string;
@@ -205,24 +219,116 @@ const createWebHash = (name: string, def: any): TRet<WebHash> => {
   return hash;
 };
 
-/** WebCrypto SHA1 (RFC 3174) legacy hash function. */
+/**
+ * WebCrypto SHA1 legacy hash function from RFC 3174.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha1 } from '@awasm/noble/webcrypto.js';
+ * if (await sha1.isSupported()) await sha1.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha1 = /* @__PURE__ */ createWebHash('SHA-1', def_sha1);
-/** WebCrypto SHA2-224 hash function from RFC 6234; support is runtime-dependent. */
+/**
+ * WebCrypto SHA2-224 hash function from RFC 6234.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha224 } from '@awasm/noble/webcrypto.js';
+ * if (await sha224.isSupported()) await sha224.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha224 = /* @__PURE__ */ createWebHash('SHA-224', def_sha224);
-/** WebCrypto SHA2-256 hash function from RFC 4634. */
+/**
+ * WebCrypto SHA2-256 hash function from RFC 4634.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha256 } from '@awasm/noble/webcrypto.js';
+ * if (await sha256.isSupported()) await sha256.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha256 = /* @__PURE__ */ createWebHash('SHA-256', def_sha256);
-/** WebCrypto SHA2-384 hash function from RFC 4634. */
+/**
+ * WebCrypto SHA2-384 hash function from RFC 4634.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha384 } from '@awasm/noble/webcrypto.js';
+ * if (await sha384.isSupported()) await sha384.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha384 = /* @__PURE__ */ createWebHash('SHA-384', def_sha384);
-/** WebCrypto SHA2-512 hash function from RFC 4634. */
+/**
+ * WebCrypto SHA2-512 hash function from RFC 4634.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha512 } from '@awasm/noble/webcrypto.js';
+ * if (await sha512.isSupported()) await sha512.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha512 = /* @__PURE__ */ createWebHash('SHA-512', def_sha512);
-/** WebCrypto SHA3-256 hash function (runtime-dependent / experimental). */
+/**
+ * WebCrypto SHA3-256 hash function.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha3_256 } from '@awasm/noble/webcrypto.js';
+ * if (await sha3_256.isSupported()) await sha3_256.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha3_256 = /* @__PURE__ */ createWebHash('SHA3-256', def_sha3_256);
-/** WebCrypto SHA3-384 hash function (runtime-dependent / experimental). */
+/**
+ * WebCrypto SHA3-384 hash function.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha3_384 } from '@awasm/noble/webcrypto.js';
+ * if (await sha3_384.isSupported()) await sha3_384.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha3_384 = /* @__PURE__ */ createWebHash('SHA3-384', def_sha3_384);
-/** WebCrypto SHA3-512 hash function (runtime-dependent / experimental). */
+/**
+ * WebCrypto SHA3-512 hash function.
+ * @param msg - message to hash.
+ * @param opts - optional hash output configuration.
+ * @returns Hash output bytes.
+ * @example
+ * ```ts
+ * import { sha3_512 } from '@awasm/noble/webcrypto.js';
+ * if (await sha3_512.isSupported()) await sha3_512.async(new Uint8Array([1, 2, 3]));
+ * ```
+ */
 export const sha3_512 = /* @__PURE__ */ createWebHash('SHA3-512', def_sha3_512);
 
-/** WebCrypto HMAC message authentication code from RFC 2104; this wrapper supports one-shot tags only. */
+/**
+ * WebCrypto HMAC message authentication code from RFC 2104.
+ * @param hash - hash function definition.
+ * @param key - secret MAC key bytes.
+ * @param message - message to authenticate.
+ * @returns Authentication tag bytes.
+ * @example
+ * ```ts
+ * import { hmac, sha256 } from '@awasm/noble/webcrypto.js';
+ * if (await sha256.isSupported())
+ *   await hmac(sha256, new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]));
+ * ```
+ */
 export const hmac: TRet<{
   (
     hash: TArg<HashInstance<any>>,
@@ -256,7 +362,22 @@ export const hmac: TRet<{
   return fn;
 })();
 
-/** WebCrypto HKDF extract-and-expand key derivation from RFC 5869; returns one-shot output bytes. */
+/**
+ * WebCrypto HKDF extract-and-expand key derivation from RFC 5869.
+ * @param hash - hash function definition.
+ * @param ikm - input keying material.
+ * @param salt - optional salt bytes.
+ * @param info - optional context bytes.
+ * @param length - requested output length in bytes.
+ * @throws If WebCrypto is unavailable or the requested algorithm is unsupported. {@link Error}
+ * @returns Derived output bytes.
+ * @example
+ * ```ts
+ * import { hkdf, sha256 } from '@awasm/noble/webcrypto.js';
+ * if (await sha256.isSupported())
+ *   await hkdf(sha256, new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]), new Uint8Array([7]), 16);
+ * ```
+ */
 export const hkdf = async (
   hash: TArg<HashInstance<any>>,
   ikm: TArg<Uint8Array>,
@@ -301,7 +422,17 @@ type WebPbkdf2 = (hash: TArg<HashInstance<any>>) => {
     opts: TArg<Pbkdf2Opts>
   ) => Promise<TRet<Uint8Array>>;
 };
-/** WebCrypto PBKDF2-HMAC key-derivation factory from RFC 8018; sync mode is unsupported. */
+/**
+ * WebCrypto PBKDF2-HMAC key-derivation factory from RFC 8018.
+ * @param hash - hash function definition.
+ * @returns One-shot PBKDF2 helper with async support.
+ * @example
+ * ```ts
+ * import { pbkdf2, sha256 } from '@awasm/noble/webcrypto.js';
+ * if (await sha256.isSupported())
+ *   await pbkdf2(sha256).async(new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]), { c: 10, dkLen: 16 });
+ * ```
+ */
 export const pbkdf2: TRet<WebPbkdf2> = ((hash: TArg<HashInstance<any>>) => {
   const fn = ((_password: TArg<KDFInput>, _salt: TArg<KDFInput>, _opts: TArg<Pbkdf2Opts>) => {
     throw new Error('sync is not supported');
@@ -370,13 +501,46 @@ const gen = (algo: BlockMode, nonceLength: number, def: any): TRet<WebCipher> =>
     () => probeCipher(algo, [16, 24, 32], nonceLength)
   ) as WebCipher;
 
-/** WebCrypto AES-CBC cipher from NIST SP 800-38A; callers must supply an unpredictable 16-byte IV. */
+/**
+ * WebCrypto AES-CBC cipher from NIST SP 800-38A.
+ * Callers must supply an unpredictable 16-byte IV and authenticate ciphertext separately.
+ * @param key - secret key bytes.
+ * @param args - cipher arguments such as 16-byte IV bytes.
+ * @returns Configured cipher instance.
+ * @example
+ * ```ts
+ * import { cbc } from '@awasm/noble/webcrypto.js';
+ * if (await cbc.isSupported())
+ *   await cbc(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
+ * ```
+ */
 export const cbc = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CBC)(), 16, def_cbc);
-/** WebCrypto AES-CTR mode from NIST SP 800-38A; callers must supply a unique 16-byte initial counter block per key. */
+/**
+ * WebCrypto AES-CTR mode from NIST SP 800-38A.
+ * Callers must supply a unique 16-byte initial counter block per key and authenticate ciphertext separately.
+ * @param key - secret key bytes.
+ * @param args - cipher arguments such as 16-byte initial counter block bytes.
+ * @returns Configured cipher instance.
+ * @example
+ * ```ts
+ * import { ctr } from '@awasm/noble/webcrypto.js';
+ * if (await ctr.isSupported())
+ *   await ctr(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
+ * ```
+ */
 export const ctr = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CTR)(), 16, def_ctr);
 /**
  * WebCrypto AES-GCM authenticated cipher from NIST SP 800-38D.
  * Returns ciphertext with a 16-byte tag, requires unique IVs per key, and leaves
  * nonce-shape enforcement beyond raw bytes to the backend.
+ * @param key - secret key bytes.
+ * @param args - cipher arguments such as nonce and AAD bytes.
+ * @returns Configured cipher instance.
+ * @example
+ * ```ts
+ * import { gcm } from '@awasm/noble/webcrypto.js';
+ * if (await gcm.isSupported())
+ *   await gcm(new Uint8Array(16), new Uint8Array(12), new Uint8Array([1, 2, 3])).encrypt.async(new Uint8Array(16));
+ * ```
  */
 export const gcm = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.GCM)(), 12, def_gcm);

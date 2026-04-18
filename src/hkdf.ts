@@ -13,6 +13,14 @@ import { abytes, ahash, anumber, clean, type TArg, type TRet } from './utils.ts'
  * @param hash - hash function that would be used (e.g. sha256)
  * @param ikm - input keying material, the initial key
  * @param salt - optional salt value (a non-secret random value)
+ * @returns Pseudorandom key derived from input keying material.
+ * @example
+ * Run the HKDF extract step.
+ * ```ts
+ * import { extract } from '@awasm/noble/hkdf.js';
+ * import { sha256 } from '@awasm/noble';
+ * extract(sha256, new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]));
+ * ```
  */
 export function extract(
   hash: TArg<HashInstance<any>>,
@@ -98,13 +106,18 @@ export function expand(
  * @throws If the requested output length exceeds the HKDF limit for the
  *   selected hash. {@link Error}
  * @example
- * import { hkdf } from '@noble/hashes/hkdf';
- * import { sha256 } from '@noble/hashes/sha2';
- * import { randomBytes, utf8ToBytes } from '@noble/hashes/utils';
- * const inputKey = randomBytes(32);
- * const salt = randomBytes(32);
- * const info = utf8ToBytes('application-key');
- * const okm = hkdf(sha256, inputKey, salt, info, 32);
+ * HKDF (RFC 5869): derive keys from an initial input.
+ * ```ts
+ * import { hkdf } from '@awasm/noble/hkdf.js';
+ * import { sha256 } from '@awasm/noble';
+ * const okm = hkdf(
+ *   sha256,
+ *   new Uint8Array([1, 2, 3]),
+ *   new Uint8Array([4, 5, 6]),
+ *   new Uint8Array([7]),
+ *   16
+ * );
+ * ```
  */
 export const hkdf = (
   hash: TArg<HashInstance<any>>,

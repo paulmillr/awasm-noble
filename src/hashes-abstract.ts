@@ -74,14 +74,31 @@ export type HashMod = {
   ): void;
 };
 
+/** Hash algorithm definition shared by all runtime/target wrappers. */
 export type HashDef<Mod extends HashMod, Opts = undefined> = {
+  /** Optional domain-separation suffix byte applied before the shared padding path. */
   suffix?: number;
+  /** Preferred chunk count for batch helpers. */
   chunks?: number; // = 16
+  /** Compression/input block size in bytes. */
   blockLen: number;
+  /** Output block size in bytes when it differs from {@link blockLen}. */
   outputBlockLen?: number;
+  /** Default digest length in bytes. */
   outputLen: number;
+  /** Whether the hash supports variable-length XOF output. */
   canXOF?: boolean;
+  /** Optional ASN.1 object identifier for fixed-output hash variants. */
   oid?: TRet<Uint8Array>;
+  /**
+   * Initialize state and optionally override block count or effective output length.
+   * @param batchPos - batch slot being initialized.
+   * @param maxBlocks - maximum number of blocks available in the shared buffers.
+   * @param mod - backend hash module implementation for this batch slot.
+   * @param hash - public hash helper being configured.
+   * @param opts - merged hash and output options for this initialization; see {@link MergeOpts}.
+   * @returns Optional overrides for preloaded block count or effective digest length.
+   */
   init?: (
     batchPos: number,
     maxBlocks: number,
@@ -99,32 +116,49 @@ Since we finally can do zero-alloc hashes, we should expose nice zero-alloc API 
   (if hash is used for consistency checks instead of cryptography)
 - out.length >= outPos+dkLen?
 */
+/** Shared output-buffer options for one-shot and streaming hash APIs. */
 export type OutputOpts = {
+  /** Optional destination buffer to write the digest or XOF output into. */
   out?: TArg<Uint8Array>;
+  /** Starting offset inside {@link out}. */
   outPos?: number;
+  /** Requested digest length in bytes. */
   dkLen?: number; // outLen, but compat with old API.
 };
 
+/** Streaming hash instance returned by {@link HashInstance.create}. */
 export type HashStream<Opts> = {
   // streaming mode
-  // Whether this stream supports variable-length XOF output via xof()/xofInto().
+  /** Whether this stream supports variable-length XOF output via xof()/xofInto(). */
   canXOF: boolean;
+  /** Absorb more message bytes into the stream and return the same stream. */
   update(msg: TArg<Uint8Array>): HashStream<Opts>; // this, but without weird recursive types
   // finish(): void;
+  /** Finalize the stream and return the digest bytes. */
   digest(opts?: Opts & OutputOpts): TRet<Uint8Array>;
+  /** Wipe internal state and make the stream unusable. */
   destroy(): void;
+  /** Finalize the stream and return variable-length XOF output. */
   xof(bytes: number, opts?: Opts & OutputOpts): TRet<Uint8Array>;
   // clone
+  /** Copy the current stream state into another stream or a freshly created clone target. */
   _cloneInto(to?: HashStream<Opts>): HashStream<Opts>;
+  /** Clone the current stream state. */
   clone(): HashStream<Opts>;
   // Fixed-size in-place digest: writes only the digest prefix and returns nothing.
+  /**
+   * Finalize the stream and write the fixed-size digest into `buf`.
+   * @param buf - destination buffer for the digest bytes.
+   */
   digestInto(buf: TArg<Uint8Array>): void;
   // Variable-size XOF output: fills the whole destination buffer and returns it back.
+  /** Finalize the stream and fill `buf` with XOF output. */
   xofInto(buf: TArg<Uint8Array>): TRet<Uint8Array>;
 };
 
 type MergeOpts<Opts, Out> = [Opts] extends [undefined] ? Out : Opts & Out;
 
+/** One-shot hash helper plus streaming constructor and metadata. */
 export type HashInstance<Opts> = Asyncify<
   (msg: TArg<Uint8Array>, opts?: MergeOpts<Opts, OutputOpts>) => TRet<Uint8Array>
 > & {

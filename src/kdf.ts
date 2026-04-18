@@ -32,6 +32,7 @@ type KDFOpts = {
   onProgress?: (progress: number) => void;
   nextTick?: () => Promise<void>;
 };
+/** Generic installed KDF surface with sync/async entrypoints and backend metadata. */
 export type KDF<Opts extends KDFOpts> = ((
   password: TArg<KDFInput>,
   salt: TArg<KDFInput>,
@@ -108,6 +109,12 @@ function mkKDF<O extends KDFOpts>(
 }
 
 type Stub<Opts extends KDFOpts> = { install: (impl: KDF<Opts>) => void };
+/**
+ * Create an installable KDF stub for targets that attach the real implementation later.
+ * @param _def_ - definition factory that installed implementations must report via
+ *   `getDefinition()`.
+ * @returns Frozen stub KDF that forwards to the installed implementation once available.
+ */
 export function mkKDFStub<Opts extends KDFOpts>(
   _def_: TArg<(mod: any, deps: any, platform: string) => KDF<Opts>>
 ): TRet<KDF<Opts> & Stub<Opts>> {
@@ -209,9 +216,12 @@ function argon2Opts(opts: TArg<ArgonOpts>) {
   return merged;
 }
 
-// Keep exported size caps behind pure calls so unrelated KDF bundles can drop them.
+/**
+ * Local Argon2 backend block cap used to bound the resident working matrix per batch.
+ * Kept as a pure exported constant so unrelated bundles can tree-shake it away.
+ */
 export const ARGON_MAX_BLOCKS = /* @__PURE__ */ (() => 10 * 1024)();
-// RFC 9106 sync points constant `SL = 4`, fixed by the design rather than exposed as a tuning knob.
+/** RFC 9106 sync-points constant `SL = 4`, fixed by the Argon2 design. */
 export const ARGON2_SYNC_POINTS = 4;
 
 function mkArgon2(
@@ -495,10 +505,34 @@ function mkArgon2(
   ) satisfies KDF<ArgonOpts>;
 }
 /** argon2d GPU-resistant version. */
+/**
+ * Build the argon2d KDF for a concrete backend.
+ * @param modFn - backend module factory.
+ * @param deps - required hash dependencies.
+ * @param platform - backend platform label.
+ * @param definition - definition object exposed through `getDefinition()`.
+ * @returns Installed argon2d KDF surface.
+ */
 export const mkArgon2d = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2d)());
 /** argon2i side-channel-resistant version. */
+/**
+ * Build the argon2i KDF for a concrete backend.
+ * @param modFn - backend module factory.
+ * @param deps - required hash dependencies.
+ * @param platform - backend platform label.
+ * @param definition - definition object exposed through `getDefinition()`.
+ * @returns Installed argon2i KDF surface.
+ */
 export const mkArgon2i = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2i)());
 /** argon2id combining i+d, the most popular version from RFC 9106 */
+/**
+ * Build the argon2id KDF for a concrete backend.
+ * @param modFn - backend module factory.
+ * @param deps - required hash dependencies.
+ * @param platform - backend platform label.
+ * @param definition - definition object exposed through `getDefinition()`.
+ * @returns Installed argon2id KDF surface.
+ */
 export const mkArgon2id = /* @__PURE__ */ mkArgon2.bind(
   null,
   /* @__PURE__ */ (() => AT.Argon2id)()
@@ -515,6 +549,11 @@ export const mkArgon2id = /* @__PURE__ */ mkArgon2.bind(
  */
 export type Pbkdf2Opts = KDFOpts & { c: number };
 
+/**
+ * Build a PBKDF2-HMAC KDF around the provided hash function.
+ * @param hash - hash function used as the PBKDF2 PRF.
+ * @returns Installed PBKDF2 surface with sync and async entrypoints.
+ */
 export function pbkdf2(hash: TArg<HashInstance<any>>) {
   return mkKDF<Pbkdf2Opts>(
     { dkLen: 32, maxmem: 1024 },
@@ -574,17 +613,27 @@ export function pbkdf2(hash: TArg<HashInstance<any>>) {
 
 // Scrypt
 
-// Mem: 3*SCRYPT_BATCH*64 bytes
-// Internal resident-workspace cap in 64-byte chunks; maxP/MAX_BATCH derive from this so large
-// scrypt parallelization factors are processed in chunks without changing RFC-visible output.
+/**
+ * Internal scrypt lane batch cap in 64-byte chunks.
+ * Controls resident workspace size without changing RFC-visible output.
+ */
 export const SCRYPT_BATCH = /* @__PURE__ */ (() => 10 * 1024)(); // ~2mb
 
+/** Scrypt options: cost factor `N`, block size `r`, and parallelization `p`. */
 export type ScryptOpts = KDFOpts & {
   N: number; // cost factor
   r: number; // block size
   p: number; // parallelization
 };
 
+/**
+ * Build the scrypt KDF for a concrete backend.
+ * @param modFn - backend module factory.
+ * @param deps - required hash dependencies.
+ * @param platform - backend platform label.
+ * @param definition - definition object exposed through `getDefinition()`.
+ * @returns Installed scrypt KDF surface.
+ */
 export function mkScrypt(
   modFn: TArg<() => SCRYPT>,
   deps: TArg<{ sha256: HashInstance<any> }>,

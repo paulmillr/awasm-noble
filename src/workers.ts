@@ -43,6 +43,10 @@ How call works:
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Shared worker-pool controller for threaded backends.
+ * @param mod - compiled worker-pool module factory.
+ */
 export class WorkerPool {
   //  limit: number;
   private mod: any;
@@ -135,4 +139,5 @@ export class WorkerPool {
 }
 
 // Keep the default pool tree-shakeable when only WorkerPool is imported.
+/** Default shared worker pool for wasm_threads targets. */
 export const WP = /* @__PURE__ */ new WorkerPool(modWasm);

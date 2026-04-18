@@ -211,6 +211,7 @@ export const md5: TRet<HashDef<TYPES.MD5>> = /* @__PURE__ */ Object.freeze({
 
 /** Blake1 options. Basically just "salt" */
 export type BlakeOpts = {
+  /** Optional salt bytes mixed into the Blake1 initialization state. */
   salt?: TArg<Uint8Array>;
 };
 
@@ -280,9 +281,13 @@ export const blake512: TRet<HashDef<TYPES.BLAKE512, BlakeOpts>> = /* @__PURE__ *
  * dkLen is output length. key is used in MAC mode. salt is used in KDF mode.
  */
 export type Blake2Opts = {
+  /** Requested digest length in bytes. */
   dkLen?: number;
+  /** Optional MAC key bytes for keyed BLAKE2 mode. */
   key?: TArg<Uint8Array>;
+  /** Optional salt bytes mixed into the initialization state. */
   salt?: TArg<Uint8Array>;
+  /** Optional personalization bytes mixed into the initialization state. */
   personalization?: TArg<Uint8Array>;
 };
 
@@ -359,9 +364,13 @@ export const blake2b: TRet<HashDef<TYPES.BLAKE2B, Blake2Opts>> = /* @__PURE__ */
  *   A good default format for the context string is "[application] [commit timestamp] [purpose]".
  */
 export type Blake3Opts = {
+  /** Requested digest length in bytes. */
   dkLen?: number;
+  /** Optional 32-byte key for keyed BLAKE3 / MAC mode. */
   key?: Uint8Array;
+  /** Optional context string bytes for derive-key mode. */
   context?: Uint8Array;
+  /** Internal flag selecting the derive-key context initialization path. */
   _keyContext?: boolean;
 };
 export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.freeze({

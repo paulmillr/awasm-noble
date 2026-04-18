@@ -32,13 +32,12 @@ export type ArxInit = {
   counterRight: boolean;
 };
 
-const MAX_COUNTER = 2 ** 32 - 1;
 const arxLimit = (len: number, args?: unknown[], pending = 0) => {
   const opts = args?.[1] as ArxOpts | undefined;
   const counter = opts?.counter === undefined ? 0 : opts.counter;
   const avail = pending > 0 && pending < 64 ? 64 - pending : 0;
   const blocks = Math.ceil(Math.max(0, len - avail) / 64);
-  if (blocks > 0 && counter > MAX_COUNTER - blocks) throw new Error('arx: counter overflow');
+  if (blocks > 0 && counter > 2 ** 32 - 1 - blocks) throw new Error('arx: counter overflow');
 };
 
 // Validations live in validate() because init() is lazy; tests expect errors at factory creation.

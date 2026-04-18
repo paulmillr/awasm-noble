@@ -5,15 +5,28 @@
 import type { HashInstance, HashStream } from './hashes-abstract.ts';
 import { abytes, ahash, aoutput, clean, type TArg, type TRet } from './utils.ts';
 
+/** Streaming HMAC helper returned by `hmac.create(...)`. */
 export interface HMACStream {
+  /** Whether the underlying hash supports extendable output. */
   canXOF: boolean;
+  /** Absorb another message chunk into the MAC state. */
   update(msg: TArg<Uint8Array>): HMACStream;
+  /** Finalize and return the authentication tag. */
   digest(): TRet<Uint8Array>;
+  /** Wipe internal state and make the instance unusable. */
   destroy(): void;
+  /** Clone the current state into a new or provided stream instance. */
   _cloneInto(to?: HMACStream): HMACStream;
+  /** Clone the current stream state. */
   clone(): HMACStream;
+  /**
+   * Finalize directly into the provided output buffer.
+   * @param buf - output buffer for the authentication tag.
+   */
   digestInto(buf: TArg<Uint8Array>): void;
+  /** Underlying hash block length in bytes. */
   blockLen: number;
+  /** Authentication tag length in bytes. */
   outputLen: number;
 }
 
@@ -99,14 +112,30 @@ class HMAC<T extends HashStream<any>> {
   }
 }
 
-export const hmac: TRet<{
+type HmacFn = {
   (
     hash: TArg<HashInstance<any>>,
     key: TArg<Uint8Array>,
     message: TArg<Uint8Array>
   ): TRet<Uint8Array>;
   create(hash: TArg<HashInstance<any>>, key: TArg<Uint8Array>): HMACStream;
-}> = /* @__PURE__ */ (() => {
+};
+
+/**
+ * HMAC: RFC 2104 message authentication code.
+ * @param hash - hash function that would be used e.g. sha256
+ * @param key - authentication key bytes
+ * @param message - message bytes to authenticate
+ * @returns Authentication tag bytes.
+ * @example
+ * Compute an RFC 2104 HMAC.
+ * ```ts
+ * import { hmac } from '@awasm/noble/hmac.js';
+ * import { sha256 } from '@awasm/noble';
+ * const mac = hmac(sha256, new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]));
+ * ```
+ */
+export const hmac: TRet<HmacFn> = /* @__PURE__ */ (() => {
   const fn = ((
     hash: TArg<HashInstance<any>>,
     key: TArg<Uint8Array>,
@@ -114,7 +143,7 @@ export const hmac: TRet<{
   ): TRet<Uint8Array> =>
     new HMAC<any>(hash as HashInstance<any>, key)
       .update(message)
-      .digest() as TRet<Uint8Array>) as typeof hmac;
+      .digest() as TRet<Uint8Array>) as TRet<HmacFn>;
   fn.create = (hash: TArg<HashInstance<any>>, key: TArg<Uint8Array>) =>
     new HMAC<any>(hash as HashInstance<any>, key) as HMACStream;
   return fn;
