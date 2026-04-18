@@ -22,6 +22,20 @@ const DEF_COMPILER_OPTS = {
 };
 const LICENSE = fs.readFileSync(new URL('../LICENSE', import.meta.url), 'utf8').trimEnd();
 const LICENSE_COMMENT = `/*!\n${LICENSE}\n*/\n`;
+const TARGET_TYPE_IMPORTS = [
+  `import type { OutputOpts, HashStream, HashDef, HashInstance } from '../../hashes-abstract.ts';`,
+  `import type { TArg, TRet, Asyncify, KDFInput } from '../../utils.ts';`,
+  `import type { BlakeOpts, Blake2Opts, Blake3Opts } from '../../hashes.ts';`,
+  `import type { Cipher, CipherDef, CipherFactory } from '../../ciphers-abstract.ts';`,
+  `import type { KDF, ScryptOpts, ArgonOpts } from '../../kdf.ts';`,
+].join('\n');
+const TARGET_TYPE_EXPORTS = [
+  `export type { OutputOpts, HashStream, HashDef, HashInstance };`,
+  `export type { TArg, TRet, Asyncify, KDFInput };`,
+  `export type { BlakeOpts, Blake2Opts, Blake3Opts };`,
+  `export type { Cipher, CipherDef, CipherFactory };`,
+  `export type { KDF, ScryptOpts, ArgonOpts };`,
+].join('\n');
 // Should be avail in worker
 const MODULES_REGISTRY: Record<string, Module> = {
   typeMod: genRuntimeTypeMod(),
@@ -200,15 +214,188 @@ See [IRTF draft](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha).
 With 24-byte nonce, it's safe to make it random (CSPRNG).
 Also known as \`secretbox\` from libsodium / nacl.`,
 };
-const mkDoc = (doc: string) => {
-  const lines = doc.split('\n').map((l) => l.trim());
-  if (lines.length === 1) return `/** ${lines[0]} */`;
-  return ['/**', ...lines.map((l) => (l ? ` * ${l}` : ' *')), ' */'].join('\n');
+const cleanDocLine = (line: string) =>
+  line
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/`/g, "'");
+const splitDoc = (doc: string) => {
+  const body: string[] = [];
+  const tags: string[] = [];
+  const example: string[] = [];
+  let inExample = false;
+  for (const raw of doc.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (inExample) {
+      example.push(line);
+      continue;
+    }
+    if (line.startsWith('@example')) {
+      inExample = true;
+      continue;
+    }
+    if (line.startsWith('@')) {
+      tags.push(cleanDocLine(line));
+      continue;
+    }
+    body.push(cleanDocLine(line));
+  }
+  return { body, tags, example };
+};
+const DOC_TAGS = {
+  hash: [
+    '@param msg - message to hash.',
+    '@param opts - optional hash configuration such as output length or keyed mode parameters.',
+    '@returns Hash output bytes.',
+  ],
+  cipher: [
+    '@param key - secret key bytes.',
+    '@param args - algorithm-specific extra arguments such as nonce or AAD.',
+    '@returns Configured cipher instance.',
+  ],
+  kdf: [
+    '@param password - password or key material bytes.',
+    '@param salt - salt bytes.',
+    '@param opts - algorithm configuration options.',
+    '@returns Derived output bytes.',
+  ],
+} as const;
+const DOC_TAGS_BY_NAME: Record<string, string[]> = {
+  secretbox: [
+    '@param key - secret key bytes.',
+    '@param nonce - nonce bytes.',
+    '@returns Configured secretbox helper.',
+  ],
+};
+const DOC_EXAMPLES: Record<string, string[]> = {
+  poly1305: [
+    "import { poly1305 } from '@awasm/noble';",
+    'poly1305(new Uint8Array([1, 2, 3]), { key: new Uint8Array(32) });',
+  ],
+  cmac: [
+    "import { cmac } from '@awasm/noble';",
+    'cmac(new Uint8Array([1, 2, 3]), { key: new Uint8Array(16) });',
+  ],
+  ghash: [
+    "import { ghash } from '@awasm/noble';",
+    'ghash(new Uint8Array([1, 2, 3]), { key: new Uint8Array(16) });',
+  ],
+  polyval: [
+    "import { polyval } from '@awasm/noble';",
+    'polyval(new Uint8Array([1, 2, 3]), { key: new Uint8Array(16) });',
+  ],
+  scrypt: [
+    "import { scrypt } from '@awasm/noble';",
+    "scrypt('password', 'salt', { N: 16, r: 1, p: 1, dkLen: 32 });",
+  ],
+  argon2d: [
+    "import { argon2d } from '@awasm/noble';",
+    "argon2d('password', 'saltsalt', { t: 1, m: 8, p: 1, dkLen: 32 });",
+  ],
+  argon2i: [
+    "import { argon2i } from '@awasm/noble';",
+    "argon2i('password', 'saltsalt', { t: 1, m: 8, p: 1, dkLen: 32 });",
+  ],
+  argon2id: [
+    "import { argon2id } from '@awasm/noble';",
+    "argon2id('password', 'saltsalt', { t: 1, m: 8, p: 1, dkLen: 32 });",
+  ],
+  ecb: ["import { ecb } from '@awasm/noble';", 'ecb(new Uint8Array(16));'],
+  cbc: ["import { cbc } from '@awasm/noble';", 'cbc(new Uint8Array(16), new Uint8Array(16));'],
+  cfb: ["import { cfb } from '@awasm/noble';", 'cfb(new Uint8Array(16), new Uint8Array(16));'],
+  ofb: ["import { ofb } from '@awasm/noble';", 'ofb(new Uint8Array(16), new Uint8Array(16));'],
+  ctr: ["import { ctr } from '@awasm/noble';", 'ctr(new Uint8Array(16), new Uint8Array(16));'],
+  gcm: ["import { gcm } from '@awasm/noble';", 'gcm(new Uint8Array(16), new Uint8Array(12));'],
+  gcmsiv: [
+    "import { gcmsiv } from '@awasm/noble';",
+    'gcmsiv(new Uint8Array(16), new Uint8Array(12));',
+  ],
+  aessiv: ["import { aessiv } from '@awasm/noble';", 'aessiv(new Uint8Array(32));'],
+  aeskw: ["import { aeskw } from '@awasm/noble';", 'aeskw(new Uint8Array(16));'],
+  aeskwp: ["import { aeskwp } from '@awasm/noble';", 'aeskwp(new Uint8Array(16));'],
+  salsa20: [
+    "import { salsa20 } from '@awasm/noble';",
+    'salsa20(new Uint8Array(32), new Uint8Array(8));',
+  ],
+  xsalsa20: [
+    "import { xsalsa20 } from '@awasm/noble';",
+    'xsalsa20(new Uint8Array(32), new Uint8Array(24));',
+  ],
+  chacha8: [
+    "import { chacha8 } from '@awasm/noble';",
+    'chacha8(new Uint8Array(32), new Uint8Array(12));',
+  ],
+  chacha12: [
+    "import { chacha12 } from '@awasm/noble';",
+    'chacha12(new Uint8Array(32), new Uint8Array(12));',
+  ],
+  chacha20orig: [
+    "import { chacha20orig } from '@awasm/noble';",
+    'chacha20orig(new Uint8Array(32), new Uint8Array(8));',
+  ],
+  chacha20: [
+    "import { chacha20 } from '@awasm/noble';",
+    'chacha20(new Uint8Array(32), new Uint8Array(12));',
+  ],
+  xchacha20: [
+    "import { xchacha20 } from '@awasm/noble';",
+    'xchacha20(new Uint8Array(32), new Uint8Array(24));',
+  ],
+  chacha20poly1305: [
+    "import { chacha20poly1305 } from '@awasm/noble';",
+    'chacha20poly1305(new Uint8Array(32), new Uint8Array(12));',
+  ],
+  xchacha20poly1305: [
+    "import { xchacha20poly1305 } from '@awasm/noble';",
+    'xchacha20poly1305(new Uint8Array(32), new Uint8Array(24));',
+  ],
+  xsalsa20poly1305: [
+    "import { xsalsa20poly1305 } from '@awasm/noble';",
+    'xsalsa20poly1305(new Uint8Array(32), new Uint8Array(24));',
+  ],
+  secretbox: [
+    "import { secretbox } from '@awasm/noble';",
+    'secretbox(new Uint8Array(32), new Uint8Array(24));',
+  ],
+};
+const example = (name: string, kind: keyof typeof DOC_TAGS) => {
+  const byName = DOC_EXAMPLES[name];
+  if (byName) return byName;
+  if (kind === 'hash') {
+    return [
+      `import { ${name} } from '@awasm/noble';`,
+      `${name}(new Uint8Array([1, 2, 3]));`,
+    ];
+  }
+  throw new Error(`missing @example for public export: ${name}`);
+};
+const mkDoc = (name: string, doc: string) => {
+  const parsed = splitDoc(doc);
+  const kind = GenericDefinitions[name]
+    ? 'kdf'
+    : CipherDefinitions[name] || name === 'secretbox'
+      ? 'cipher'
+      : 'hash';
+  const tags = parsed.tags.length ? parsed.tags : DOC_TAGS_BY_NAME[name] || DOC_TAGS[kind];
+  const ex = parsed.example.length ? parsed.example : example(name, kind);
+  return [
+    '/**',
+    ...parsed.body.map((line) => ` * ${line}`),
+    ' *',
+    ...tags.map((line) => ` * ${line}`),
+    ' * @example',
+    ' * ```ts',
+    ...ex.map((line) => ` * ${line}`),
+    ' * ```',
+    ' */',
+  ].join('\n');
 };
 const withDoc = (name: string, code: string) => {
   const doc = DOCS[name];
   if (!doc) throw new Error(`missing JSDoc for public export: ${name}`);
-  return `${mkDoc(doc)}\n${code}`;
+  return `${mkDoc(name, doc)}\n${code}`;
 };
 
 type Mod = ReturnType<typeof js.wrapModule> | undefined;
@@ -365,7 +552,7 @@ async function main() {
       instances.push(
         withDoc(
           'secretbox',
-          `export const secretbox = (key: Uint8Array, nonce: Uint8Array) => {
+          `export const secretbox = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {
   const xs = xsalsa20poly1305(key, nonce);
   return { seal: xs.encrypt, open: xs.decrypt };
 };`
@@ -373,7 +560,9 @@ async function main() {
       );
       write(
         `${targetDir(ver)}/index.ts`,
-        `${Array.from(imports).join('\n')}
+        `${TARGET_TYPE_IMPORTS}
+${Array.from(imports).join('\n')}
+${TARGET_TYPE_EXPORTS}
 ${Array.from(instances).join('\n')}`
       );
     }
