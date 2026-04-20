@@ -1055,12 +1055,22 @@ export function genBlake3(_type: TypeName, _opts = {}) {
           V[12] = L[0];
           V[13] = L[1];
           // V[14] = u32.select(chunkIsLast, u32.sub(blockLen, left), blockLen);
+          // The isLastBlock + lastChunkPos mask was previously built as
+          //   T.and(T.fromN('u32', isLastBlock), T.eq(vBatchPos, ...))
+          // but T.fromN('u32', isLastBlock) splats the scalar 1 to [1,1,1,1] — a bit
+          // value, not an all-ones lane mask. AND with T.eq's proper [-1,...] mask gave
+          // [0,0,0,1], and since T.select lowers to v128.bitselect (bitwise, not
+          // element-wise) only the LSB of `left` survived. That truncated V[14] to
+          // blockLen - (left & 1) on the last block of the last chunk, so inputs whose
+          // length falls in [4096k-63, 4096k-2] produced wrong digests.
+          // Do the isLastBlock pick in scalar u32 (same across lanes), then gate by
+          // the per-lane T.eq mask — matches the pattern in proccessChunksParallel below.
           const vBatchPos = T.add(T.laneOffsets(), T.fromN('u32', batchPos));
           V[14] = T.sub(
             T.fromN('u32', blockLen),
             T.select(
-              T.and(T.fromN('u32', isLastBlock), T.eq(vBatchPos, T.fromN('u32', lastChunkPos))),
-              T.fromN('u32', left),
+              T.eq(vBatchPos, T.fromN('u32', lastChunkPos)),
+              T.fromN('u32', u32.select(isLastBlock, left, u32.const(0))),
               T.const(0)
             )
           );
