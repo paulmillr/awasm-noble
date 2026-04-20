@@ -238,6 +238,12 @@ export function mkHash<Mod extends HashMod, Opts>(
       reset(batchPos, 1, 0, outBlockLen, maxOutBlocks);
       let blocks = 0;
       let streamOutputLen = outputLen;
+      if (rawOpts.dkLen !== undefined) {
+        anumber(rawOpts.dkLen, 'opts.dkLen');
+        streamOutputLen = rawOpts.dkLen | 0;
+        if (!canXOF && streamOutputLen > outputLen)
+          throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${streamOutputLen}`);
+      }
       if (init) {
         const i = init(batchPos, maxBlocks, mod, hash as HashInstance<Opts>, rawOpts);
         if (i && i.blocks !== undefined) blocks = i.blocks;
@@ -380,7 +386,8 @@ export function mkHash<Mod extends HashMod, Opts>(
 
     function checkOutputOpts(
       o = {} as TArg<OutputOpts>,
-      bytes?: number
+      bytes?: number,
+      defaultLen: number = outputLen
     ): TRet<{ dkLen: number; out: TRet<Uint8Array>; outPos: number }> {
       const raw = o as OutputOpts;
       if (raw.dkLen !== undefined) anumber(raw.dkLen, 'opts.dkLen');
@@ -388,7 +395,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       if (raw.out !== undefined) abytes(raw.out, undefined, 'output');
       if (bytes !== undefined) anumber(bytes, 'xof.bytes');
       let dkLen =
-        bytes !== undefined ? bytes : (raw.dkLen === undefined ? outputLen : raw.dkLen) | 0;
+        bytes !== undefined ? bytes : (raw.dkLen === undefined ? defaultLen : raw.dkLen) | 0;
       // Old awasm hash output opts intentionally allow requesting a shorter fixed digest, but
       // must reject oversize lengths instead of silently clamping or zero-extending the tail.
       if (!canXOF && dkLen > outputLen)
@@ -575,7 +582,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       }
       digest(opts = {} as Opts & OutputOpts): TRet<Uint8Array> {
         if (this.destroyed) throw new Error('Hash instance has been destroyed');
-        const outChecked = checkOutputOpts(opts);
+        const outChecked = checkOutputOpts(opts, undefined, this.outputLen);
         this.finish();
         const { out: res, maxWritten } = processOutput(opts, outChecked);
         this.destroy();
