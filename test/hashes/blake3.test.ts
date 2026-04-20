@@ -49,6 +49,23 @@ for (const k in PLATFORMS) {
           }
         }
       });
+
+      should('dkLen is consistent between one-shot and streaming', () => {
+        // dkLen in digest() should take priority, but specifying dkLen in
+        // create() should also work.
+        const msg = new Uint8Array([1, 2, 3, 4]);
+        const expected = blake3(msg, { dkLen: 64 });
+        let hash = blake3.create({ dkLen: 64 });
+        hash.update(msg);
+        let out = hash.digest();
+        eql(out, expected);
+        hash = blake3.create();
+        hash.update(msg);
+        out = hash.digest({ dkLen: 64 });
+        eql(out, expected);
+      });
     });
   });
 }
+
+should.runWhen(import.meta.url);
