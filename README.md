@@ -550,7 +550,7 @@ Benchmarks measured on Apple M4.
 
 Prefer `.chunks()` for multiple <1mb inputs. Prefer streaming api `.update()` for >=1mb inputs.
 
-Online benchmark (BLAKE3 checksum calculator) is available on [the demo website hosted on Vercel](https://project-m2e90.vercel.app).
+Online benchmark (BLAKE3 checksum calculator) is available on [the demo website hosted on Vercel](https://b3sum.vercel.app).
 
 ### wasm_threads
 
