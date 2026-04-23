@@ -220,9 +220,9 @@ function argon2Opts(opts: TArg<ArgonOpts>) {
  * Local Argon2 backend block cap used to bound the resident working matrix per batch.
  * Kept as a pure exported constant so unrelated bundles can tree-shake it away.
  */
-export const ARGON_MAX_BLOCKS = /* @__PURE__ */ (() => 10 * 1024)();
+export const ARGON_MAX_BLOCKS: number = /* @__PURE__ */ (() => 10 * 1024)();
 /** RFC 9106 sync-points constant `SL = 4`, fixed by the Argon2 design. */
-export const ARGON2_SYNC_POINTS = 4;
+export const ARGON2_SYNC_POINTS: number = 4;
 
 function mkArgon2(
   type: Types,
@@ -230,7 +230,7 @@ function mkArgon2(
   deps: TArg<{ blake2b: HashInstance<any> }>,
   platform: string,
   definition?: any
-) {
+): KDF<ArgonOpts> {
   const { blake2b } = deps;
   let mod: ARGON2;
   // Instantiate the backend lazily once so importing Argon2 surfaces does not build it eagerly.
@@ -513,7 +513,12 @@ function mkArgon2(
  * @param definition - definition object exposed through `getDefinition()`.
  * @returns Installed argon2d KDF surface.
  */
-export const mkArgon2d = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2d)());
+export const mkArgon2d: (
+  modFn: TArg<() => ARGON2>,
+  deps: TArg<{ blake2b: HashInstance<any> }>,
+  platform: string,
+  definition?: any
+) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2d)());
 /** argon2i side-channel-resistant version. */
 /**
  * Build the argon2i KDF for a concrete backend.
@@ -523,7 +528,12 @@ export const mkArgon2d = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (()
  * @param definition - definition object exposed through `getDefinition()`.
  * @returns Installed argon2i KDF surface.
  */
-export const mkArgon2i = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2i)());
+export const mkArgon2i: (
+  modFn: TArg<() => ARGON2>,
+  deps: TArg<{ blake2b: HashInstance<any> }>,
+  platform: string,
+  definition?: any
+) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2i)());
 /** argon2id combining i+d, the most popular version from RFC 9106 */
 /**
  * Build the argon2id KDF for a concrete backend.
@@ -533,10 +543,12 @@ export const mkArgon2i = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (()
  * @param definition - definition object exposed through `getDefinition()`.
  * @returns Installed argon2id KDF surface.
  */
-export const mkArgon2id = /* @__PURE__ */ mkArgon2.bind(
-  null,
-  /* @__PURE__ */ (() => AT.Argon2id)()
-);
+export const mkArgon2id: (
+  modFn: TArg<() => ARGON2>,
+  deps: TArg<{ blake2b: HashInstance<any> }>,
+  platform: string,
+  definition?: any
+) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2id)());
 
 // PBKDF2 copied from noble-hashes
 // TODO: real target-specific implementation
@@ -554,7 +566,7 @@ export type Pbkdf2Opts = KDFOpts & { c: number };
  * @param hash - hash function used as the PBKDF2 PRF.
  * @returns Installed PBKDF2 surface with sync and async entrypoints.
  */
-export function pbkdf2(hash: TArg<HashInstance<any>>) {
+export function pbkdf2(hash: TArg<HashInstance<any>>): KDF<Pbkdf2Opts> {
   return mkKDF<Pbkdf2Opts>(
     { dkLen: 32, maxmem: 1024 },
     function* (
@@ -617,7 +629,7 @@ export function pbkdf2(hash: TArg<HashInstance<any>>) {
  * Internal scrypt lane batch cap in 64-byte chunks.
  * Controls resident workspace size without changing RFC-visible output.
  */
-export const SCRYPT_BATCH = /* @__PURE__ */ (() => 10 * 1024)(); // ~2mb
+export const SCRYPT_BATCH: number = /* @__PURE__ */ (() => 10 * 1024)(); // ~2mb
 
 /** Scrypt options: cost factor `N`, block size `r`, and parallelization `p`. */
 export type ScryptOpts = KDFOpts & {
@@ -639,7 +651,7 @@ export function mkScrypt(
   deps: TArg<{ sha256: HashInstance<any> }>,
   platform: string,
   definition?: any
-) {
+): KDF<ScryptOpts> {
   const { sha256 } = deps;
   let mod: SCRYPT;
   // Instantiate the backend lazily once so importing scrypt surfaces does not build it eagerly.

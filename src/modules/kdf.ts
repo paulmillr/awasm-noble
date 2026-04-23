@@ -11,8 +11,12 @@ import { ARGON2_SYNC_POINTS, ARGON_MAX_BLOCKS, SCRYPT_BATCH } from '../kdf.ts';
 import { salsaCore } from './ciphers.ts';
 
 export function genScrypt(_type: TypeName, _opts = {}) {
-  const salsa20_8 = (f: Scope, lanes: number, X: Val<'u32', unknown>[]) =>
-    salsaCore(f, lanes, X, 8, true);
+  // Deno publish hits TS2589 on the internal 16-word state here; keep this generator-only helper
+  // on widened types so the emitted target code stays unchanged.
+  type Word = Val<'u32', unknown>;
+  type State = Word[] & { __state__?: never };
+  const salsa20_8 = (f: Scope, lanes: number, X: State): void =>
+    salsaCore(f, lanes, X as Word[], 8, true);
   return new Module('scrypt')
     .mem('xorInput', array('u32', {}, SCRYPT_BATCH, 16))
     .mem('output', array('u32', {}, 2 * SCRYPT_BATCH, 16)) // at least two blocks (state + current)
@@ -45,15 +49,21 @@ export function genScrypt(_type: TypeName, _opts = {}) {
         f.doN([], blocks, (c) => {
           const input = mem[c].lanes(lanes)[batchPos];
           const out = mem[u32.add(c, u32.const(1))].lanes(lanes)[batchPos];
-          f.doN(input[lastChunkIndex].get(), r, (i, ...X) => {
+          (
+            f.doN as (
+              state: readonly Word[],
+              cnt: typeof r,
+              body: (cnt: typeof r, ...s: Word[]) => Word[]
+            ) => Word[]
+          )(input[lastChunkIndex].get() as Word[], r, (i: typeof r, ...X: Word[]) => {
             const idx = u32.mul(i, u32.const(2));
             let inp = input[idx].get();
             for (let k = 0; k < 16; k++) X[k] = T.xor(X[k], inp[k]); // X = X ^ Input[2*i]
-            salsa20_8(f, lanes, X);
+            salsa20_8(f, lanes, X as State);
             out[i].set(X);
             inp = input[u32.add(idx, u32.const(1))].get();
             for (let k = 0; k < 16; k++) X[k] = T.xor(X[k], inp[k]); // X = X ^ Input[2*i+1]
-            salsa20_8(f, lanes, X);
+            salsa20_8(f, lanes, X as State);
             out[u32.add(r, i)].set(X); // Write to Output[r + i] (The "Tail")
             return X;
           });

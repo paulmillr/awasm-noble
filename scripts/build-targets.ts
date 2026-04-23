@@ -36,6 +36,24 @@ const TARGET_TYPE_EXPORTS = [
   `export type { Cipher, CipherDef, CipherFactory };`,
   `export type { KDF, ScryptOpts, ArgonOpts };`,
 ].join('\n');
+// JSR slow-types requires explicit public annotations on generated wrappers too.
+// Keep the helper aliases local to generated files so public signatures stay readable.
+const TARGET_TYPE_HELPERS = [
+  `type MACOpts = { key: TArg<Uint8Array> } | TArg<Uint8Array>;`,
+  `type SecretBox = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {`,
+  `  seal: Cipher['encrypt'];`,
+  `  open: Cipher['decrypt'];`,
+  `};`,
+].join('\n');
+const HASH_BLAKE1 = new Set(['blake224', 'blake256', 'blake384', 'blake512']);
+const HASH_MAC = new Set(['poly1305', 'cmac', 'ghash', 'polyval']);
+const hashType = (name: string) => {
+  if (HASH_BLAKE1.has(name)) return 'TRet<HashInstance<BlakeOpts>>';
+  if (name === 'blake2s' || name === 'blake2b') return 'TRet<HashInstance<Blake2Opts>>';
+  if (name === 'blake3') return 'TRet<HashInstance<Blake3Opts>>';
+  if (HASH_MAC.has(name)) return 'TRet<HashInstance<MACOpts>>';
+  return 'TRet<HashInstance<undefined>>';
+};
 // Should be avail in worker
 const MODULES_REGISTRY: Record<string, Module> = {
   typeMod: genRuntimeTypeMod(),
@@ -498,7 +516,10 @@ async function main() {
         } else if (ver === 'stub') {
           instance = `mkHashStub(def_${name})`;
         }
-        instanceAdd(name, `export const ${name} = /* @__PURE__ */ ${instance};`);
+        instanceAdd(
+          name,
+          `export const ${name}: ${hashType(name)} = /* @__PURE__ */ ${instance};`
+        );
       }
       for (const name in CipherDefinitions) {
         const { mod } = CipherDefinitions[name];
@@ -524,7 +545,7 @@ async function main() {
         } else if (ver === 'stub') {
           instance = `mkCipherStub(def_${name})`;
         }
-        instanceAdd(name, `export const ${name} = /* @__PURE__ */ ${instance};`);
+        instanceAdd(name, `export const ${name}: CipherFactory = /* @__PURE__ */ ${instance};`);
       }
       for (const name in GenericDefinitions) {
         const { mod, deps, stub } = GenericDefinitions[name];
@@ -546,13 +567,16 @@ async function main() {
         if (ver.includes('threads'))
           instance = `def_${name}(/* @__PURE__ */ mod_${name}.bind(null, {}, pool), ${depsObj}, '${ver}')`;
         else if (ver === 'stub') instance = `${stub.fn}(def_${name});`;
-        instanceAdd(name, `export const ${name} = /* @__PURE__ */ ${instance};`);
+        instanceAdd(
+          name,
+          `export const ${name}: ReturnType<typeof def_${name}> = /* @__PURE__ */ ${instance};`
+        );
       }
       // noble-sodium compatibility helper; keep it in platform modules and re-export from salsa module.
       instances.push(
         withDoc(
           'secretbox',
-          `export const secretbox = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {
+          `export const secretbox: SecretBox = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {
   const xs = xsalsa20poly1305(key, nonce);
   return { seal: xs.encrypt, open: xs.decrypt };
 };`
@@ -562,6 +586,7 @@ async function main() {
         `${targetDir(ver)}/index.ts`,
         `${TARGET_TYPE_IMPORTS}
 ${Array.from(imports).join('\n')}
+${TARGET_TYPE_HELPERS}
 ${TARGET_TYPE_EXPORTS}
 ${Array.from(instances).join('\n')}`
       );
@@ -573,6 +598,7 @@ ${Array.from(instances).join('\n')}`
     const runtimeFns = new Set<string>();
     const runtimeSpecs = new Set<string>();
     imports.add(`import { toRuntime } from '@awasm/compiler/runtime.js';`);
+    imports.add(`import type * as TYPES from '../types.ts';`);
     imports.add(`import typeMod from '../js/type_mod.js';`);
     const instances: string[] = [];
     for (const name in MODULES) {
@@ -580,7 +606,7 @@ ${Array.from(instances).join('\n')}`
       runtimeFns.add(fn);
       runtimeSpecs.add(`${name} as spec_${name}`);
       instances.push(
-        `export const ${name} = /* @__PURE__ */ toRuntime(typeMod, /* @__PURE__ */ ${fn}('${type}', /* @__PURE__ */ (() => spec_${name}.opts)()), /* @__PURE__ */ (() => spec_${name}.compilerOpts)());`
+        `export const ${name}: () => TYPES.${name.toUpperCase()} = /* @__PURE__ */ toRuntime(typeMod, /* @__PURE__ */ ${fn}('${type}', /* @__PURE__ */ (() => spec_${name}.opts)()), /* @__PURE__ */ (() => spec_${name}.compilerOpts)());`
       );
     }
     imports.add(`import { ${Array.from(runtimeFns).join(', ')} } from '../../modules/index.ts';`);

@@ -342,7 +342,7 @@ export function clean(...arrays: TArg<TypedArray[]>): void {
  * cleanFast(new Uint8Array(16), 8);
  * ```
  */
-export const cleanFast = (() => {
+export const cleanFast: (dst: TArg<Uint8Array>, len?: number) => void = (() => {
   let zero: Uint8Array | undefined;
   return (dst: TArg<Uint8Array>, len: number = dst.length): void => {
     abytes(dst);
@@ -395,7 +395,9 @@ export function overlapBytes(a: TArg<Uint8Array>, b: TArg<Uint8Array>): boolean 
   );
 }
 
-export const __TEST = /* @__PURE__ */ Object.freeze({ assertLE });
+export const __TEST: Readonly<{ assertLE: typeof assertLE }> = /* @__PURE__ */ Object.freeze({
+  assertLE,
+});
 
 // Built-in hex conversion https://caniuse.com/mdn-javascript_builtins_uint8array_fromhex
 const hasHexBuiltin: boolean = /* @__PURE__ */ (() =>

@@ -61,7 +61,7 @@ export class WorkerPool {
     this.registry = {};
     this.setModule(mod);
   }
-  private setModule(mod: typeof modWasm) {
+  private setModule(mod: typeof modWasm): void {
     this.mod = mod(
       {
         env: {
@@ -77,26 +77,26 @@ export class WorkerPool {
   // NOTE: re-uses code from js.ts
   // Generated worker_pool.js starts root workers in setModule().
   // This placeholder does not restart after stop().
-  private async initWorkers() {}
-  private workerMask() {
+  private async initWorkers(): Promise<void> {}
+  private workerMask(): number {
     let mask = 0;
     // Generated worker_pool.js assigns worker ids from 1, so bit 0 is not a worker.
     for (let i = 0; i < this.mod.workers.length; i++) mask |= 1 << (i + 1);
     return mask;
   }
-  _fmtMask(mask: number) {
+  _fmtMask(mask: number): string {
     return mask.toString(2).padStart(32, '0');
   }
   // "Public" API
   // Module may call those
-  notify(regId: number, mask: number) {
+  notify(regId: number, mask: number): void {
     this.mod._worker_notify(regId, mask);
   }
-  online() {
+  online(): number {
     const res = this.mod._worker_online();
     return res;
   }
-  install(code: any, memory: any) {
+  install(code: any, memory: any): number {
     const id = this.pos++;
     this.registry[id] = { code, memory };
     let notified = 0;
@@ -113,7 +113,7 @@ export class WorkerPool {
   //   if (limit < 0 || limit > 31) throw new Error(`wrong limit: ${limit} expected [0...31)`);
   //   this.limit = limit;
   // }
-  async waitOnline() {
+  async waitOnline(): Promise<void> {
     for (;;) {
       const online = this.mod._worker_online();
       const mask = this.workerMask();
@@ -129,10 +129,10 @@ export class WorkerPool {
       await sleep(100);
     }
   }
-  start() {
+  start(): void {
     this.initWorkers();
   }
-  stop() {
+  stop(): void {
     for (const w of this.mod.workers) w.terminate();
     this.mod.mainReset();
   }
@@ -140,4 +140,4 @@ export class WorkerPool {
 
 // Keep the default pool tree-shakeable when only WorkerPool is imported.
 /** Default shared worker pool for wasm_threads targets. */
-export const WP = /* @__PURE__ */ new WorkerPool(modWasm);
+export const WP: WorkerPool = /* @__PURE__ */ new WorkerPool(modWasm);

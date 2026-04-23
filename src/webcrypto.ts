@@ -230,7 +230,7 @@ const createWebHash = (name: string, def: any): TRet<WebHash> => {
  * if (await sha1.isSupported()) await sha1.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha1 = /* @__PURE__ */ createWebHash('SHA-1', def_sha1);
+export const sha1: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-1', def_sha1);
 /**
  * WebCrypto SHA2-224 hash function from RFC 6234.
  * @param msg - message to hash.
@@ -242,7 +242,7 @@ export const sha1 = /* @__PURE__ */ createWebHash('SHA-1', def_sha1);
  * if (await sha224.isSupported()) await sha224.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha224 = /* @__PURE__ */ createWebHash('SHA-224', def_sha224);
+export const sha224: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-224', def_sha224);
 /**
  * WebCrypto SHA2-256 hash function from RFC 4634.
  * @param msg - message to hash.
@@ -254,7 +254,7 @@ export const sha224 = /* @__PURE__ */ createWebHash('SHA-224', def_sha224);
  * if (await sha256.isSupported()) await sha256.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha256 = /* @__PURE__ */ createWebHash('SHA-256', def_sha256);
+export const sha256: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-256', def_sha256);
 /**
  * WebCrypto SHA2-384 hash function from RFC 4634.
  * @param msg - message to hash.
@@ -266,7 +266,7 @@ export const sha256 = /* @__PURE__ */ createWebHash('SHA-256', def_sha256);
  * if (await sha384.isSupported()) await sha384.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha384 = /* @__PURE__ */ createWebHash('SHA-384', def_sha384);
+export const sha384: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-384', def_sha384);
 /**
  * WebCrypto SHA2-512 hash function from RFC 4634.
  * @param msg - message to hash.
@@ -278,7 +278,7 @@ export const sha384 = /* @__PURE__ */ createWebHash('SHA-384', def_sha384);
  * if (await sha512.isSupported()) await sha512.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha512 = /* @__PURE__ */ createWebHash('SHA-512', def_sha512);
+export const sha512: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-512', def_sha512);
 /**
  * WebCrypto SHA3-256 hash function.
  * @param msg - message to hash.
@@ -290,7 +290,7 @@ export const sha512 = /* @__PURE__ */ createWebHash('SHA-512', def_sha512);
  * if (await sha3_256.isSupported()) await sha3_256.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha3_256 = /* @__PURE__ */ createWebHash('SHA3-256', def_sha3_256);
+export const sha3_256: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA3-256', def_sha3_256);
 /**
  * WebCrypto SHA3-384 hash function.
  * @param msg - message to hash.
@@ -302,7 +302,7 @@ export const sha3_256 = /* @__PURE__ */ createWebHash('SHA3-256', def_sha3_256);
  * if (await sha3_384.isSupported()) await sha3_384.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha3_384 = /* @__PURE__ */ createWebHash('SHA3-384', def_sha3_384);
+export const sha3_384: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA3-384', def_sha3_384);
 /**
  * WebCrypto SHA3-512 hash function.
  * @param msg - message to hash.
@@ -314,7 +314,7 @@ export const sha3_384 = /* @__PURE__ */ createWebHash('SHA3-384', def_sha3_384);
  * if (await sha3_512.isSupported()) await sha3_512.async(new Uint8Array([1, 2, 3]));
  * ```
  */
-export const sha3_512 = /* @__PURE__ */ createWebHash('SHA3-512', def_sha3_512);
+export const sha3_512: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA3-512', def_sha3_512);
 
 /**
  * WebCrypto HMAC message authentication code from RFC 2104.
@@ -514,7 +514,7 @@ const gen = (algo: BlockMode, nonceLength: number, def: any): TRet<WebCipher> =>
  *   await cbc(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const cbc = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CBC)(), 16, def_cbc);
+export const cbc: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CBC)(), 16, def_cbc);
 /**
  * WebCrypto AES-CTR mode from NIST SP 800-38A.
  * Callers must supply a unique 16-byte initial counter block per key and authenticate ciphertext separately.
@@ -528,7 +528,7 @@ export const cbc = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CBC)(), 16, d
  *   await ctr(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const ctr = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CTR)(), 16, def_ctr);
+export const ctr: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CTR)(), 16, def_ctr);
 /**
  * WebCrypto AES-GCM authenticated cipher from NIST SP 800-38D.
  * Returns ciphertext with a 16-byte tag, requires unique IVs per key, and leaves
@@ -543,4 +543,4 @@ export const ctr = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CTR)(), 16, d
  *   await gcm(new Uint8Array(16), new Uint8Array(12), new Uint8Array([1, 2, 3])).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const gcm = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.GCM)(), 12, def_gcm);
+export const gcm: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.GCM)(), 12, def_gcm);

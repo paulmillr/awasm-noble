@@ -20,6 +20,14 @@
     "prettier": "3.6.2",
     "typescript": "5.9.2"
   },
+  "peerDependencies": {
+    "@awasm/compiler": "0.1.1"
+  },
+  "peerDependenciesMeta": {
+    "@awasm/compiler": {
+      "optional": true
+    }
+  },
   "scripts": {
     "bench": "node benchmark/1-hashes-ciphers.ts; node benchmark/2-parallel.ts",
     "build": "npm run build:targets && tsc && npm run format",
@@ -27,6 +35,7 @@
     "build:clean": "rm -rf src/targets targets modules *.js *.js.map *.d.ts *.d.ts.map 2> /dev/null",
     "format": "prettier --write --no-error-on-unmatched-pattern '*.js' '*.d.ts' 'src/**/*.{js,ts}' 'modules/**/*.{js,ts}' 'targets/**/*.{js,ts}' 'test/*.ts' 'test/ciphers/*.ts' 'test/hashes/*.ts'",
     "test": "node test/index.ts",
+    "test:slow": "node test/slow.ts",
     "test:zeroize": "CHECK_ZEROIZE=1 node test/index.ts"
   },
   "exports": {
