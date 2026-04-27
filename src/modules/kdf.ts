@@ -10,6 +10,9 @@ import { type TypeName } from '@awasm/compiler/types.js';
 import { ARGON2_SYNC_POINTS, ARGON_MAX_BLOCKS, SCRYPT_BATCH } from '../kdf.ts';
 import { salsaCore } from './ciphers.ts';
 
+const _0xffffffffn = /* @__PURE__ */ BigInt(0xffffffff);
+const _1n = /* @__PURE__ */ BigInt(1);
+
 export function genScrypt(_type: TypeName, _opts = {}) {
   // Deno publish hits TS2589 on the internal 16-word state here; keep this generator-only helper
   // on widened types so the emitted target code stays unchanged.
@@ -95,7 +98,7 @@ export function genArgon2(_type: TypeName, _opts: {}) {
       (f, lanes, batchPos, perBatch, prevPos, needXor, MAX_PARALLEL) => {
         const { u32 } = f.types;
         const T = f.getType('u64', lanes);
-        const MASK32 = T.const(0xffffffffn);
+        const MASK32 = T.const(_0xffffffffn);
         const firstDim = u32.div(u32.const(ARGON_MAX_BLOCKS), MAX_PARALLEL);
         function blamka(A: any, B: any) {
           const loProd = T.mul(T.and(A, MASK32), T.and(B, MASK32)); // 32×32 → low 64 mod 2^64
@@ -258,7 +261,7 @@ export function genArgon2(_type: TypeName, _opts: {}) {
           f.ifElse(shouldUpdate, [], () => {
             f.doN([], batchLen, (cnt) => {
               const curBatch = u32.add(batchPos, cnt);
-              INPUT_BLOCKS[curBatch][0][6].mut.add(u64.const(1n));
+              INPUT_BLOCKS[curBatch][0][6].mut.add(u64.const(_1n));
               REF_INDICES[1][curBatch].set(u32.const(1));
               REF_INDICES[2][curBatch].set(u32.const(2));
               REF_BLOCKS[1][u32.add(batchPos, cnt)].as8().fill(0);

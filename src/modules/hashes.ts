@@ -25,6 +25,9 @@ import {
 import * as constants from '../constants.ts';
 import { CHUNKS, getLanes, MIN_PER_THREAD, readMSG, type TArg } from './utils.ts';
 
+const _0n = /* @__PURE__ */ BigInt(0);
+const _8n = /* @__PURE__ */ BigInt(8);
+
 // Generic Chi and Maj functions
 function Chi<V extends Val<UnsignedType, G>, G = unknown>(
   T: GetOps<UnsignedType, G>,
@@ -109,7 +112,7 @@ function padCounter<T extends UnsignedType>(
           const paddingBlocks = u32.select(fits, u32.const(0), u32.const(1)); // fits ? 0 : 1
           const endOfBlock = u32.add(take, left, u32.mul(paddingBlocks, blockLen));
           let total = u64.add(counter.get(), u64.fromN('u32', take)); // what we added here
-          let bitLen = u64.mul(total, u64.const(8n));
+          let bitLen = u64.mul(total, u64.const(_8n));
           if (!isLE) bitLen = u64.swapEndianness(bitLen);
           buffer.as8()[u32.sub(endOfBlock, u32.const(8))].write('u64', bitLen);
           // optional counter flag
@@ -279,7 +282,7 @@ function keccakFn<T extends UnsignedType>(
   const { u32 } = f.types;
   const T = f.getTypeGeneric<UnsignedType, T>(type, lanes);
   return f.doN1([S], u32.const(rounds), (r, S) => {
-    const B = new Array(5).fill(T.const(0n));
+    const B = new Array(5).fill(T.const(_0n));
     // Theta
     for (let x = 0; x < 5; x++) {
       for (let y = 0; y < 5; y++) B[x] = T.xor(B[x], S[x + y * 5]);

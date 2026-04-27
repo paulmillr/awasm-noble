@@ -103,16 +103,17 @@ export const B2B_IV = /* @__PURE__ */ Uint32Array.from([
 ]);
 export const B2B_IV_U8 = /* @__PURE__ */ u8(B2B_IV);
 
-export const B2B_IV_U64 = [
-  0x6a09e667_f3bcc908n,
-  0xbb67ae85_84caa73bn,
-  0x3c6ef372_fe94f82bn,
-  0xa54ff53a_5f1d36f1n,
-  0x510e527f_ade682d1n,
-  0x9b05688c_2b3e6c1fn,
-  0x1f83d9ab_fb41bd6bn,
-  0x5be0cd19_137e2179n,
-];
+const _32n = /* @__PURE__ */ BigInt(32);
+export const B2B_IV_U64 = /* @__PURE__ */ [
+  '0x6a09e667f3bcc908',
+  '0xbb67ae8584caa73b',
+  '0x3c6ef372fe94f82b',
+  '0xa54ff53a5f1d36f1',
+  '0x510e527fade682d1',
+  '0x9b05688c2b3e6c1f',
+  '0x1f83d9abfb41bd6b',
+  '0x5be0cd19137e2179',
+].map((n) => BigInt(n));
 
 // RFC 7693 §2.6 / Appendix D: BLAKE2s reuses the SHA-256 IV words as-is.
 export const B2S_IV = /* @__PURE__ */ Uint32Array.from([
@@ -166,26 +167,26 @@ export const B64C = /* @__PURE__ */ (() =>
   0xf12c7f99, 0xba7c9045, 0xb3916cf7, 0x24a19947, 0x858efc16, 0x0801f2e2, 0x71574e69, 0x636920d8,
 ]))();
 
-export const B64C_U64 = [
+export const B64C_U64 = /* @__PURE__ */ [
   // first half
-  0x243f6a88_85a308d3n,
-  0x13198a2e_03707344n,
-  0xa4093822_299f31d0n,
-  0x082efa98_ec4e6c89n,
-  0x452821e6_38d01377n,
-  0xbe5466cf_34e90c6cn,
-  0xc0ac29b7_c97c50ddn,
-  0x3f84d5b5_b5470917n,
+  '0x243f6a8885a308d3',
+  '0x13198a2e03707344',
+  '0xa4093822299f31d0',
+  '0x082efa98ec4e6c89',
+  '0x452821e638d01377',
+  '0xbe5466cf34e90c6c',
+  '0xc0ac29b7c97c50dd',
+  '0x3f84d5b5b5470917',
   // second half
-  0x9216d5d9_8979fb1bn,
-  0xd1310ba6_98dfb5acn,
-  0x2ffd72db_d01adfb7n,
-  0xb8e1afed_6a267e96n,
-  0xba7c9045_f12c7f99n,
-  0x24a19947_b3916cf7n,
-  0x0801f2e2_858efc16n,
-  0x636920d8_71574e69n,
-];
+  '0x9216d5d98979fb1b',
+  '0xd1310ba698dfb5ac',
+  '0x2ffd72dbd01adfb7',
+  '0xb8e1afed6a267e96',
+  '0xba7c9045f12c7f99',
+  '0x24a19947b3916cf7',
+  '0x0801f2e2858efc16',
+  '0x636920d871574e69',
+].map((n) => BigInt(n));
 
 export const B256_IV = /* @__PURE__ */ SHA256_IV.slice();
 // SHA-3 proposal BLAKE v1.2 §2.2.1: legacy Blake1-64 keeps the SHA-512 IV in canonical
@@ -215,8 +216,8 @@ function generateTBL512_new(): bigint[] {
       const h0 = B64C[BSIGMA[k + offset] * 2 + 0];
       const l1 = B64C[BSIGMA[k + offset - 1] * 2 + 1];
       const h1 = B64C[BSIGMA[k + offset - 1] * 2 + 0];
-      TBL.push((BigInt(l0) << 32n) | BigInt(h0));
-      TBL.push((BigInt(l1) << 32n) | BigInt(h1));
+      TBL.push((BigInt(l0) << _32n) | BigInt(h0));
+      TBL.push((BigInt(l1) << _32n) | BigInt(h1));
     }
   }
   return TBL;

@@ -354,9 +354,11 @@ export const ctr: TRet<CipherDef<TYPES.AES_CTR>> = {
 };
 
 // AEAD backends take 64-bit length inputs as [lo, hi] u32 words via u64.fromN('u32', ...).
+const _0xffffffffn = /* @__PURE__ */ BigInt(0xffffffff);
+const _32n = /* @__PURE__ */ BigInt(32);
 const splitLen = (len: number) => {
   const v = BigInt(len);
-  return [Number(v & 0xffffffffn), Number((v >> 32n) & 0xffffffffn)];
+  return [Number(v & _0xffffffffn), Number((v >> _32n) & _0xffffffffn)];
 };
 
 // Feed full blocks through the module buffer, zero-filling the unused tail so callbacks can finalize partial last blocks safely.

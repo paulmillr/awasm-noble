@@ -126,20 +126,36 @@ export type OutputOpts = {
   dkLen?: number; // outLen, but compat with old API.
 };
 
+type CreateOutputOpts = Pick<OutputOpts, 'dkLen'>;
+type CreateOpts<Opts> = MergeOpts<Opts, CreateOutputOpts>;
+
 /** Streaming hash instance returned by {@link HashInstance.create}. */
 export type HashStream<Opts> = {
   // streaming mode
+  /** Input block size in bytes for the underlying hash. */
+  blockLen: number;
+  /** Current digest length in bytes, including `create()` digest-length overrides. */
+  outputLen: number;
   /** Whether this stream supports variable-length XOF output via xof()/xofInto(). */
   canXOF: boolean;
   /** Absorb more message bytes into the stream and return the same stream. */
   update(msg: TArg<Uint8Array>): HashStream<Opts>; // this, but without weird recursive types
   // finish(): void;
-  /** Finalize the stream and return the digest bytes. */
-  digest(opts?: Opts & OutputOpts): TRet<Uint8Array>;
+  /**
+   * Finalize the stream and return the digest bytes.
+   * @param opts - optional {@link OutputOpts} controlling digest length or destination buffer.
+   * @returns Digest bytes.
+   */
+  digest(opts?: OutputOpts): TRet<Uint8Array>;
   /** Wipe internal state and make the stream unusable. */
   destroy(): void;
-  /** Finalize the stream and return variable-length XOF output. */
-  xof(bytes: number, opts?: Opts & OutputOpts): TRet<Uint8Array>;
+  /**
+   * Finalize the stream and return variable-length XOF output.
+   * @param bytes - number of XOF bytes to return.
+   * @param opts - optional {@link OutputOpts} controlling output length or destination buffer.
+   * @returns XOF output bytes.
+   */
+  xof(bytes: number, opts?: OutputOpts): TRet<Uint8Array>;
   // clone
   /** Copy the current stream state into another stream or a freshly created clone target. */
   _cloneInto(to?: HashStream<Opts>): HashStream<Opts>;
@@ -152,7 +168,11 @@ export type HashStream<Opts> = {
    */
   digestInto(buf: TArg<Uint8Array>): void;
   // Variable-size XOF output: fills the whole destination buffer and returns it back.
-  /** Finalize the stream and fill `buf` with XOF output. */
+  /**
+   * Finalize the stream and fill `buf` with XOF output.
+   * @param buf - destination buffer for XOF output.
+   * @returns The filled destination buffer.
+   */
   xofInto(buf: TArg<Uint8Array>): TRet<Uint8Array>;
 };
 
@@ -169,9 +189,10 @@ export type HashInstance<Opts> = Asyncify<
   parallel: Asyncify<
     (chunks: TArg<Uint8Array[]>, opts?: MergeOpts<Opts, OutputOpts>) => TRet<Uint8Array[]>
   >;
-  create: (opts?: Opts) => HashStream<Opts>;
+  // create() feeds initHash(), so dkLen must be valid before update().
+  create: (opts?: CreateOpts<Opts>) => HashStream<Opts>;
   getPlatform: () => string | undefined;
-  getDefinition: () => HashDef<any, Opts>;
+  getDefinition: () => HashDef<any, any>;
   isSupported?: () => boolean | Promise<boolean>;
   blockLen: number;
   outputLen: number;
@@ -218,7 +239,7 @@ export function mkHash<Mod extends HashMod, Opts>(
     chunks: TArg<Uint8Array[]>,
     opts?: TArg<Opts & OutputOpts & AsyncRunOpts>
   ) => Promise<TRet<Uint8Array[]>>;
-  let createImpl: (opts?: TArg<Opts & OutputOpts>) => TRet<HashStream<Opts>>;
+  let createImpl: (opts?: TArg<CreateOpts<Opts>>) => TRet<HashStream<Opts>>;
   let inited = false;
   function lazyInit() {
     if (inited) throw new Error('second lazyInit call');
@@ -245,7 +266,7 @@ export function mkHash<Mod extends HashMod, Opts>(
           throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${streamOutputLen}`);
       }
       if (init) {
-        const i = init(batchPos, maxBlocks, mod, hash as HashInstance<Opts>, rawOpts);
+        const i = init(batchPos, maxBlocks, mod, hash, rawOpts);
         if (i && i.blocks !== undefined) blocks = i.blocks;
         if (i && i.outputLen !== undefined) streamOutputLen = i.outputLen;
       }
@@ -580,7 +601,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         this.pos = outBlockLen;
         return blocks * blockLen;
       }
-      digest(opts = {} as Opts & OutputOpts): TRet<Uint8Array> {
+      digest(opts: OutputOpts = {}): TRet<Uint8Array> {
         if (this.destroyed) throw new Error('Hash instance has been destroyed');
         const outChecked = checkOutputOpts(opts, undefined, this.outputLen);
         this.finish();
@@ -639,8 +660,7 @@ export function mkHash<Mod extends HashMod, Opts>(
           throw new RangeError(
             'digestInto() expects output buffer of length at least ' + this.outputLen
           );
-        this.digest({ out: buf.subarray(0, this.outputLen), dkLen: this.outputLen } as Opts &
-          OutputOpts);
+        this.digest({ out: buf.subarray(0, this.outputLen), dkLen: this.outputLen });
       }
       xofInto(buf: Uint8Array): TRet<Uint8Array> {
         return this.xof(buf.length, { out: buf });
@@ -840,8 +860,8 @@ export function mkHash<Mod extends HashMod, Opts>(
         ? parallelRun.async(parts, rawOpts)
         : parallelSync(parts, rawOpts);
     };
-    createImpl = (opts = {} as TArg<Opts & OutputOpts>) => {
-      const rawOpts = opts as Opts & OutputOpts;
+    createImpl = (opts = {} as TArg<CreateOpts<Opts>>) => {
+      const rawOpts = opts as CreateOpts<Opts>;
       reset(0, 1, 0, outBlockLen, maxOutBlocks);
       const { blocks, outputLen } = initHash(rawOpts);
       return new StreamHash({ ...rawOpts, streamBufLen: blockLen, blocks, outputLen }) as TRet<
@@ -897,7 +917,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       hashAsyncImpl(msg, opts as TArg<MergeOpts<Opts, OutputOpts> & AsyncRunOpts> | undefined),
     chunks: chunksFn,
     parallel,
-    create: (opts = {} as Opts & OutputOpts) => createImpl(opts),
+    create: (opts = {} as CreateOpts<Opts>) => createImpl(opts),
     getPlatform: () => platform,
     getDefinition: () => def,
     canXOF: !!canXOF,
@@ -1085,7 +1105,7 @@ export function mkHashStub<Mod extends HashMod, Opts>(
     },
     chunks,
     parallel,
-    create(opts = {} as Opts & OutputOpts) {
+    create(opts = {} as CreateOpts<Opts>) {
       checkInner(inner);
       return inner.create(opts);
     },

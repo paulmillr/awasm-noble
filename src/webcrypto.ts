@@ -222,7 +222,7 @@ const createWebHash = (name: string, def: any): TRet<WebHash> => {
 /**
  * WebCrypto SHA1 legacy hash function from RFC 3174.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -234,7 +234,7 @@ export const sha1: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-1', def_sh
 /**
  * WebCrypto SHA2-224 hash function from RFC 6234.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -246,7 +246,7 @@ export const sha224: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-224', de
 /**
  * WebCrypto SHA2-256 hash function from RFC 4634.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -258,7 +258,7 @@ export const sha256: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-256', de
 /**
  * WebCrypto SHA2-384 hash function from RFC 4634.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -270,7 +270,7 @@ export const sha384: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-384', de
 /**
  * WebCrypto SHA2-512 hash function from RFC 4634.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -282,7 +282,7 @@ export const sha512: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA-512', de
 /**
  * WebCrypto SHA3-256 hash function.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -294,7 +294,7 @@ export const sha3_256: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA3-256',
 /**
  * WebCrypto SHA3-384 hash function.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -306,7 +306,7 @@ export const sha3_384: TRet<WebHash> = /* @__PURE__ */ createWebHash('SHA3-384',
 /**
  * WebCrypto SHA3-512 hash function.
  * @param msg - message to hash.
- * @param opts - optional hash output configuration.
+ * @param opts - optional {@link OutputOpts} hash output configuration.
  * @returns Hash output bytes.
  * @example
  * ```ts
@@ -514,7 +514,11 @@ const gen = (algo: BlockMode, nonceLength: number, def: any): TRet<WebCipher> =>
  *   await cbc(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const cbc: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CBC)(), 16, def_cbc);
+export const cbc: TRet<WebCipher> = /* @__PURE__ */ gen(
+  /* @__PURE__ */ (() => mode.CBC)(),
+  16,
+  def_cbc
+);
 /**
  * WebCrypto AES-CTR mode from NIST SP 800-38A.
  * Callers must supply a unique 16-byte initial counter block per key and authenticate ciphertext separately.
@@ -528,7 +532,11 @@ export const cbc: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CB
  *   await ctr(new Uint8Array(16), new Uint8Array(16)).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const ctr: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CTR)(), 16, def_ctr);
+export const ctr: TRet<WebCipher> = /* @__PURE__ */ gen(
+  /* @__PURE__ */ (() => mode.CTR)(),
+  16,
+  def_ctr
+);
 /**
  * WebCrypto AES-GCM authenticated cipher from NIST SP 800-38D.
  * Returns ciphertext with a 16-byte tag, requires unique IVs per key, and leaves
@@ -543,4 +551,8 @@ export const ctr: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.CT
  *   await gcm(new Uint8Array(16), new Uint8Array(12), new Uint8Array([1, 2, 3])).encrypt.async(new Uint8Array(16));
  * ```
  */
-export const gcm: WebCipher = /* @__PURE__ */ gen(/* @__PURE__ */ (() => mode.GCM)(), 12, def_gcm);
+export const gcm: TRet<WebCipher> = /* @__PURE__ */ gen(
+  /* @__PURE__ */ (() => mode.GCM)(),
+  12,
+  def_gcm
+);

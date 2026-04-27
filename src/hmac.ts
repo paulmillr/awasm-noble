@@ -11,7 +11,10 @@ export interface HMACStream {
   canXOF: boolean;
   /** Absorb another message chunk into the MAC state. */
   update(msg: TArg<Uint8Array>): HMACStream;
-  /** Finalize and return the authentication tag. */
+  /**
+   * Finalize and return the authentication tag.
+   * @returns Authentication tag bytes.
+   */
   digest(): TRet<Uint8Array>;
   /** Wipe internal state and make the instance unusable. */
   destroy(): void;

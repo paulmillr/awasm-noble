@@ -33,6 +33,7 @@
     "build": "npm run build:targets && tsc && npm run format",
     "build:targets": "node scripts/build-targets.ts",
     "build:clean": "rm -rf src/targets targets modules *.js *.js.map *.d.ts *.d.ts.map 2> /dev/null",
+    "check": "npx --no @paulmillr/jsbt check package.json",
     "format": "prettier --write --no-error-on-unmatched-pattern '*.js' '*.d.ts' 'src/**/*.{js,ts}' 'modules/**/*.{js,ts}' 'targets/**/*.{js,ts}' 'test/*.ts' 'test/ciphers/*.ts' 'test/hashes/*.ts'",
     "test": "node test/index.ts",
     "test:slow": "node test/slow.ts",

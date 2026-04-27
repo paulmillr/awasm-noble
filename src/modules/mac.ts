@@ -19,6 +19,9 @@ import { array, Module, struct } from '@awasm/compiler/module.js';
 import type { TypeName } from '@awasm/compiler/types.js';
 import { CHUNKS, getLanes, MIN_PER_THREAD, readMSG } from './utils.ts';
 
+const _0x00ff00ff00ff00ffn = /* @__PURE__ */ BigInt('0x00ff00ff00ff00ff');
+const _0x0000ffff0000ffffn = /* @__PURE__ */ BigInt('0x0000ffff0000ffff');
+
 // CMAC is a "mac-like" module, but implemented alongside AES primitives.
 // export { genCmac } from './ciphers.ts';
 
@@ -38,8 +41,8 @@ export const bswap64 = (u64: GetOps<'u64'>, u32: GetOps<'u32'>, x: Val<'u64'>) =
   const c8 = u32.castTo('i32', u32.const(8));
   const c16 = u32.castTo('i32', u32.const(16));
   const c32 = u32.castTo('i32', u32.const(32));
-  const m1 = u64.const(0x00ff_00ff_00ff_00ffn);
-  const m2 = u64.const(0x0000_ffff_0000_ffffn);
+  const m1 = u64.const(_0x00ff00ff00ff00ffn);
+  const m2 = u64.const(_0x0000ffff0000ffffn);
   const v1 = u64.or(u64.shl(u64.and(x, m1), c8), u64.and(u64.shr(x, c8), m1));
   const v2 = u64.or(u64.shl(u64.and(v1, m2), c16), u64.and(u64.shr(v1, c16), m2));
   return u64.or(u64.shl(v2, c32), u64.shr(v2, c32));

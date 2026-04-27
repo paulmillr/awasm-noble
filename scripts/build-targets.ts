@@ -129,20 +129,11 @@ See [RFC 5297](https://datatracker.ietf.org/doc/html/rfc5297.html).`,
   argon2id: ' argon2id, combining i+d, the most popular version from RFC 9106',
   blake224: ' blake1-224 hash function',
   blake256: ' blake1-256 hash function',
-  blake2b: `Blake2b hash function. 64-bit. 1.5x slower than blake2s in JS.
-@param msg - message that would be hashed
-@param opts - dkLen output length, key for MAC mode, salt, personalization`,
-  blake2s: `Blake2s hash function. Focuses on 8-bit to 32-bit platforms. 1.5x faster than blake2b in JS.
-@param msg - message that would be hashed
-@param opts - dkLen output length, key for MAC mode, salt, personalization`,
-  blake3: `BLAKE3 hash function. Can be used as MAC and KDF.
-@param msg - message that would be hashed
-@param opts - \`dkLen\` for output length, \`key\` for MAC mode, \`context\` for KDF mode
-@example
-const data = new Uint8Array(32);
-const hash = blake3(data);
-const mac = blake3(data, { key: new Uint8Array(32) });
-const kdf = blake3(data, { context: 'application name' });`,
+  blake2b: `Blake2b hash function. 64-bit.
+1.5x slower than blake2s in JS.`,
+  blake2s: `Blake2s hash function. Focuses on 8-bit to 32-bit platforms.
+1.5x faster than blake2b in JS.`,
+  blake3: 'BLAKE3 hash function. Can be used as MAC and KDF.',
   blake384: ' blake1-384 hash function',
   blake512: ' blake1-512 hash function',
   cbc: `**CBC** (Cipher Block Chaining): Each plaintext block is XORed with the
@@ -265,7 +256,7 @@ const splitDoc = (doc: string) => {
 const DOC_TAGS = {
   hash: [
     '@param msg - message to hash.',
-    '@param opts - optional hash configuration such as output length or keyed mode parameters.',
+    '@param opts - optional {@link OutputOpts} hash configuration.',
     '@returns Hash output bytes.',
   ],
   cipher: [
@@ -281,6 +272,41 @@ const DOC_TAGS = {
   ],
 } as const;
 const DOC_TAGS_BY_NAME: Record<string, string[]> = {
+  blake224: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link BlakeOpts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake256: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link BlakeOpts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake384: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link BlakeOpts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake512: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link BlakeOpts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake2s: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link Blake2Opts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake2b: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link Blake2Opts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
+  blake3: [
+    '@param msg - message to hash.',
+    '@param opts - optional {@link OutputOpts} and {@link Blake3Opts} hash configuration.',
+    '@returns Hash output bytes.',
+  ],
   secretbox: [
     '@param key - secret key bytes.',
     '@param nonce - nonce bytes.',
@@ -288,6 +314,13 @@ const DOC_TAGS_BY_NAME: Record<string, string[]> = {
   ],
 };
 const DOC_EXAMPLES: Record<string, string[]> = {
+  blake3: [
+    "import { blake3 } from '@awasm/noble';",
+    'const data = new Uint8Array(32);',
+    'const hash = blake3(data);',
+    'const mac = blake3(data, { key: new Uint8Array(32) });',
+    'const kdf = blake3(data, { context: new Uint8Array([1, 2, 3]) });',
+  ],
   poly1305: [
     "import { poly1305 } from '@awasm/noble';",
     'poly1305(new Uint8Array([1, 2, 3]), { key: new Uint8Array(32) });',
@@ -545,7 +578,7 @@ async function main() {
         } else if (ver === 'stub') {
           instance = `mkCipherStub(def_${name})`;
         }
-        instanceAdd(name, `export const ${name}: CipherFactory = /* @__PURE__ */ ${instance};`);
+        instanceAdd(name, `export const ${name}: TRet<CipherFactory> = /* @__PURE__ */ ${instance};`);
       }
       for (const name in GenericDefinitions) {
         const { mod, deps, stub } = GenericDefinitions[name];
@@ -576,7 +609,7 @@ async function main() {
       instances.push(
         withDoc(
           'secretbox',
-          `export const secretbox: SecretBox = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {
+          `export const secretbox: TRet<SecretBox> = (key: TArg<Uint8Array>, nonce: TArg<Uint8Array>) => {
   const xs = xsalsa20poly1305(key, nonce);
   return { seal: xs.encrypt, open: xs.decrypt };
 };`
@@ -599,6 +632,7 @@ ${Array.from(instances).join('\n')}`
     const runtimeSpecs = new Set<string>();
     imports.add(`import { toRuntime } from '@awasm/compiler/runtime.js';`);
     imports.add(`import type * as TYPES from '../types.ts';`);
+    imports.add(`import type { TRet } from '../../utils.ts';`);
     imports.add(`import typeMod from '../js/type_mod.js';`);
     const instances: string[] = [];
     for (const name in MODULES) {
@@ -606,7 +640,7 @@ ${Array.from(instances).join('\n')}`
       runtimeFns.add(fn);
       runtimeSpecs.add(`${name} as spec_${name}`);
       instances.push(
-        `export const ${name}: () => TYPES.${name.toUpperCase()} = /* @__PURE__ */ toRuntime(typeMod, /* @__PURE__ */ ${fn}('${type}', /* @__PURE__ */ (() => spec_${name}.opts)()), /* @__PURE__ */ (() => spec_${name}.compilerOpts)());`
+        `export const ${name}: () => TRet<TYPES.${name.toUpperCase()}> = /* @__PURE__ */ toRuntime(typeMod, /* @__PURE__ */ ${fn}('${type}', /* @__PURE__ */ (() => spec_${name}.opts)()), /* @__PURE__ */ (() => spec_${name}.compilerOpts)());`
       );
     }
     imports.add(`import { ${Array.from(runtimeFns).join(', ')} } from '../../modules/index.ts';`);

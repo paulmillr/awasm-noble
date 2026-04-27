@@ -87,26 +87,42 @@ blake3(new Uint8Array([0xca, 0xfe]));
 Hashes can be called in the following ways:
 
 ```js
+import { blake3 } from '@awasm/noble';
+
+const msg = new Uint8Array(64);
+const msg1 = msg;
+const msg2 = msg;
+const opts = {};
+
 blake3(msg);
 blake3(msg, opts);
 await blake3.async(msg);
 blake3.chunks([msg.slice(0, 32), msg.slice(32, 64)]);
-blake3.parallel([msg1, msg2])
-blake3.create().update(msg1).update(msg2).digest()
+blake3.parallel([msg1, msg2]);
+blake3.create().update(msg1).update(msg2).digest();
 ```
 
 Ciphers have following interfaces:
 
 ```js
-const cipher = chacha20poly1305(key, nonce? /*, ...optionalArgs*/);
-cipher.encrypt(data); // sync
+import { chacha20poly1305 } from '@awasm/noble';
+
+const key = new Uint8Array(32);
+const nonce = new Uint8Array(12);
+const data = new Uint8Array([1, 2, 3]);
+const cipher = chacha20poly1305(key, nonce /*, ...optionalArgs */);
+const encrypted = cipher.encrypt(data); // sync
 cipher.decrypt(encrypted);
 
-cipher.encrypt.async(data); // async
-cipher.decrypt.async(encrypted);
+await chacha20poly1305(key, nonce).encrypt.async(data); // async
+await chacha20poly1305(key, nonce).decrypt.async(encrypted);
 
-cipher.encrypt.create().update(data).finish(); // streaming
-decrypt.create().update(encrypted).finish();
+const enc = chacha20poly1305(key, nonce).encrypt.create();
+enc.update(data);
+const streamed = enc.finish(); // streaming
+const dec = chacha20poly1305(key, nonce).decrypt.create();
+dec.update(streamed.data);
+dec.finish(streamed.tag);
 ```
 
 MACs (`poly1305` / `ghash` / `polyval` / `cmac`) are hash-like, with extra `key` option:
@@ -123,8 +139,11 @@ import { sha256 as sha256js } from '@awasm/noble/js.js';
 import { sha256 as sha256wc } from '@awasm/noble/webcrypto.js';
 import { sha256 as sha256rn } from '@awasm/noble/runtime.js';
 
-for (const hash of [sha256, sha256wasm_threads, sha256js, sha256wc, sha256rn]) {
+for (const hash of [sha256, sha256wasm_threads, sha256js, sha256rn]) {
   console.log(hash(new Uint8Array([1, 2, 3])));
+}
+for (const hash of [sha256wc]) {
+  console.log(await hash.async(new Uint8Array([1, 2, 3])));
 }
 ```
 
@@ -135,7 +154,7 @@ for (const hash of [sha256, sha256wasm_threads, sha256js, sha256wc, sha256rn]) {
 2. **wasm_threads:** identical to wasm, but faster due to web workers. Requires `Cross-Origin-Opener-Policy: same-origin` & `Cross-Origin-Embedder-Policy: require-corp` CORS policies to work.
     - Check out [`examples`](./examples) for node.js & vercel example of proper headers
 3. **js:** JS files without WASM. Extra optimizations (like loop unrolling) are auto-applied, to make everything fast.
-4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Async-only. Depends on `@awasm/compiler`
+4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Depends on `@awasm/compiler`
 
 Additionally, **webcrypto** submodule wraps around built-in `WebCrypto` methods. It's async-only.
 
@@ -169,8 +188,10 @@ hash();
 
 // Switch to WebCrypto
 import { sha256 as sha256Web } from '@awasm/noble/webcrypto.js';
-if (await sha256Web.isSupported()) sha256.install(sha256Web);
-hash();
+if (await sha256Web.isSupported()) {
+  sha256.install(sha256Web);
+  console.log(await sha256.async(new Uint8Array([1, 2, 3]))); // generic
+}
 ```
 
 ### Threads
@@ -234,7 +255,7 @@ sha256
   .update(new Uint8Array([4, 5, 6]))
   .digest();
 
-sha256.chunks([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]),
+sha256.chunks([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]);
 ```
 
 For best performance: use chunks for <1kb messages. Use streaming for 1kb+ messages.
@@ -259,6 +280,9 @@ deepStrictEqual(
 ### Zero-allocation
 
 ```ts
+import { sha256 } from '@awasm/noble';
+import { deepStrictEqual } from 'node:assert';
+
 const out = new Uint8Array(sha256.outputLen);
 sha256(new Uint8Array([1, 2, 3]), { out });
 deepStrictEqual(out, sha256(new Uint8Array([1, 2, 3])));
@@ -483,7 +507,7 @@ if (await gcm.isSupported()) await gcm(key, iv12, aad).encrypt.async(plaintext);
 
 To set up the repository:
 
-```ts
+```sh
 git submodule update --init --recursive
 npm install
 npm run build

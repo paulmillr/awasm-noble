@@ -17,9 +17,19 @@ import {
 
 /** Configured cipher instance with one-shot encrypt/decrypt helpers. */
 export type Cipher = {
-  /** Encrypt plaintext bytes and optionally write into the provided output buffer. */
+  /**
+   * Encrypt plaintext bytes and optionally write into the provided output buffer.
+   * @param plaintext - plaintext bytes to encrypt.
+   * @param output - optional destination buffer for ciphertext bytes.
+   * @returns Ciphertext bytes.
+   */
   encrypt(plaintext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
-  /** Decrypt ciphertext bytes and optionally write into the provided output buffer. */
+  /**
+   * Decrypt ciphertext bytes and optionally write into the provided output buffer.
+   * @param ciphertext - ciphertext bytes to decrypt.
+   * @param output - optional destination buffer for plaintext bytes.
+   * @returns Plaintext bytes.
+   */
   decrypt(ciphertext: TArg<Uint8Array>, output?: TArg<Uint8Array>): TRet<Uint8Array>;
 };
 /** Cipher constructor plus metadata exposed on public wrappers. */

@@ -264,7 +264,7 @@ export function aoutput(out: any, instance: any): void {
  * ahash(sha256);
  * ```
  */
-export function ahash(h: TArg<HashInstance<any>>): void {
+export function ahash<Opts>(h: TArg<HashInstance<Opts>>): void {
   if (typeof h !== 'function' || typeof h.create !== 'function')
     throw new TypeError('Hash must created by hashes.mkHash');
   anumber(h.outputLen);
@@ -274,6 +274,11 @@ export function ahash(h: TArg<HashInstance<any>>): void {
   if (h.outputLen < 1) throw new Error('"outputLen" must be >= 1');
   if (h.blockLen < 1) throw new Error('"blockLen" must be >= 1');
 }
+
+/** Compatibility alias matching noble-hashes `CHash<Instance, Opts>` consumers. */
+export type CHash<_T = any, Opts = undefined> = HashInstance<Opts>;
+/** Compatibility alias matching noble-hashes `CHashXOF<Instance, Opts>` consumers. */
+export type CHashXOF<_T = any, Opts = undefined> = HashInstance<Opts>;
 
 /** Generic type encompassing 8/16/32-byte arrays - but not 64-byte. */
 // prettier-ignore
@@ -312,6 +317,26 @@ export function u32(arr: TArg<TypedArray>): TRet<Uint32Array> {
     arr.byteOffset,
     Math.floor(arr.byteLength / 4)
   ) as TRet<Uint32Array>;
+}
+
+/**
+ * Byte-swaps each 32-bit word on big-endian platforms.
+ * @param arr - word array to normalize in place.
+ * @returns The input array after any required byte swaps.
+ * @example
+ * ```ts
+ * import { swap32IfBE } from '@awasm/noble/utils.js';
+ * const words = new Uint32Array([0x11223344]);
+ * swap32IfBE(words);
+ * ```
+ */
+export function swap32IfBE(arr: TArg<Uint32Array>): TRet<Uint32Array> {
+  if (isLE) return arr as TRet<Uint32Array>;
+  for (let i = 0; i < arr.length; i++) {
+    const x = arr[i];
+    arr[i] = ((x << 24) | ((x & 0xff00) << 8) | ((x >>> 8) & 0xff00) | (x >>> 24)) >>> 0;
+  }
+  return arr as TRet<Uint32Array>;
 }
 
 /**
@@ -1068,9 +1093,17 @@ export function randomBytes(bytesLength = 32): TRet<Uint8Array> {
 
 /** Sync cipher: takes byte array and returns byte array. */
 export type Cipher = {
-  /** Encrypt plaintext bytes. */
+  /**
+   * Encrypt plaintext bytes.
+   * @param plaintext - plaintext bytes to encrypt.
+   * @returns Ciphertext bytes.
+   */
   encrypt(plaintext: TArg<Uint8Array>): TRet<Uint8Array>;
-  /** Decrypt ciphertext bytes. */
+  /**
+   * Decrypt ciphertext bytes.
+   * @param ciphertext - ciphertext bytes to decrypt.
+   * @returns Plaintext bytes.
+   */
   decrypt(ciphertext: TArg<Uint8Array>): TRet<Uint8Array>;
 };
 

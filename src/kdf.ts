@@ -230,7 +230,7 @@ function mkArgon2(
   deps: TArg<{ blake2b: HashInstance<any> }>,
   platform: string,
   definition?: any
-): KDF<ArgonOpts> {
+): TRet<KDF<ArgonOpts>> {
   const { blake2b } = deps;
   let mod: ARGON2;
   // Instantiate the backend lazily once so importing Argon2 surfaces does not build it eagerly.
@@ -518,7 +518,10 @@ export const mkArgon2d: (
   deps: TArg<{ blake2b: HashInstance<any> }>,
   platform: string,
   definition?: any
-) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2d)());
+) => TRet<KDF<ArgonOpts>> = /* @__PURE__ */ mkArgon2.bind(
+  null,
+  /* @__PURE__ */ (() => AT.Argon2d)()
+);
 /** argon2i side-channel-resistant version. */
 /**
  * Build the argon2i KDF for a concrete backend.
@@ -533,7 +536,10 @@ export const mkArgon2i: (
   deps: TArg<{ blake2b: HashInstance<any> }>,
   platform: string,
   definition?: any
-) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2i)());
+) => TRet<KDF<ArgonOpts>> = /* @__PURE__ */ mkArgon2.bind(
+  null,
+  /* @__PURE__ */ (() => AT.Argon2i)()
+);
 /** argon2id combining i+d, the most popular version from RFC 9106 */
 /**
  * Build the argon2id KDF for a concrete backend.
@@ -548,7 +554,10 @@ export const mkArgon2id: (
   deps: TArg<{ blake2b: HashInstance<any> }>,
   platform: string,
   definition?: any
-) => KDF<ArgonOpts> = /* @__PURE__ */ mkArgon2.bind(null, /* @__PURE__ */ (() => AT.Argon2id)());
+) => TRet<KDF<ArgonOpts>> = /* @__PURE__ */ mkArgon2.bind(
+  null,
+  /* @__PURE__ */ (() => AT.Argon2id)()
+);
 
 // PBKDF2 copied from noble-hashes
 // TODO: real target-specific implementation
@@ -566,7 +575,7 @@ export type Pbkdf2Opts = KDFOpts & { c: number };
  * @param hash - hash function used as the PBKDF2 PRF.
  * @returns Installed PBKDF2 surface with sync and async entrypoints.
  */
-export function pbkdf2(hash: TArg<HashInstance<any>>): KDF<Pbkdf2Opts> {
+export function pbkdf2(hash: TArg<HashInstance<any>>): TRet<KDF<Pbkdf2Opts>> {
   return mkKDF<Pbkdf2Opts>(
     { dkLen: 32, maxmem: 1024 },
     function* (
@@ -651,7 +660,7 @@ export function mkScrypt(
   deps: TArg<{ sha256: HashInstance<any> }>,
   platform: string,
   definition?: any
-): KDF<ScryptOpts> {
+): TRet<KDF<ScryptOpts>> {
   const { sha256 } = deps;
   let mod: SCRYPT;
   // Instantiate the backend lazily once so importing scrypt surfaces does not build it eagerly.
