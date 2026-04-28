@@ -1,6 +1,6 @@
 {
   "name": "@awasm/noble",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Auditable WASM implementation of cryptographic hashes & ciphers",
   "files": [
     "src",
@@ -11,7 +11,7 @@
     "*.d.ts.map"
   ],
   "devDependencies": {
-    "@awasm/compiler": "0.1.1",
+    "@awasm/compiler": "0.1.2",
     "@noble/ciphers": "~2.2.0",
     "@noble/hashes": "~2.2.0",
     "@paulmillr/jsbt": "0.5.0",
@@ -21,7 +21,7 @@
     "typescript": "5.9.2"
   },
   "peerDependencies": {
-    "@awasm/compiler": "0.1.1"
+    "@awasm/compiler": "0.1.2"
   },
   "peerDependenciesMeta": {
     "@awasm/compiler": {
