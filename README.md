@@ -21,8 +21,10 @@ Auditable WASM implementation of cryptographic hashes & ciphers.
 - **Reproducible builds:** deterministic cross-platform builds
 - **Auditable compiler:** reasonably small JS-to-WASM compiler
 - **Synchronous execution:** with optional async variant
-- Zero or minimal dependencies
-- PGP-signed releases and transparent NPM builds
+- Minimal deps, PGP-signed releases and transparent NPM builds
+- All libraries:
+  [awasm-noble](https://github.com/paulmillr/awasm-noble),
+  [awasm-compiler](https://github.com/paulmillr/awasm-compiler)
 - [Check out the homepage](https://paulmillr.com/awasm/)
 
 ## Usage
