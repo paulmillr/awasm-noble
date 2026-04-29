@@ -25,11 +25,13 @@ Auditable WASM implementation of cryptographic hashes & ciphers.
 - All libraries:
   [awasm-noble](https://github.com/paulmillr/awasm-noble),
   [awasm-compiler](https://github.com/paulmillr/awasm-compiler)
-- [Check out the homepage](https://paulmillr.com/awasm/)
+- [Check out the homepage](https://paulmillr.com/awasm/) for motivation behind the project
 
 ## Usage
 
 > `npm install @awasm/noble`
+
+> `deno add jsr:@awasm/noble`
 
 ```ts
 import { sha224, sha256, sha384, sha512, sha512_224, sha512_256 } from '@awasm/noble';
