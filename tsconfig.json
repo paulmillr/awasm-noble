@@ -2,6 +2,8 @@
   "extends": "@paulmillr/jsbt/tsconfig.json",
   "compilerOptions": {
     "outDir": ".",
+    // TypeScript 6 requires this when outDir is the package root and sources live in src.
+    "rootDir": "src",
     "allowJs": true,
     "isolatedDeclarations": false,
     "sourceMap": false

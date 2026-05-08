@@ -1,7 +1,8 @@
 {
   "extends": "@paulmillr/jsbt/tsconfig.test.json",
   "compilerOptions": {
-    "baseUrl": ".",
+    // TS6 requires the previously inferred test/source output layout to be explicit.
+    "rootDir": "..",
     "outDir": "compiled",
     "allowJs": true
   },

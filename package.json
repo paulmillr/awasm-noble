@@ -16,9 +16,9 @@
     "@noble/hashes": "~2.2.0",
     "@paulmillr/jsbt": "0.5.0",
     "@scure/base": "2.0.0",
-    "fast-check": "4.5.3",
+    "fast-check": "4.2.0",
     "prettier": "3.6.2",
-    "typescript": "5.9.2"
+    "typescript": "6.0.2"
   },
   "peerDependencies": {
     "@awasm/compiler": "0.1.2"
