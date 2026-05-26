@@ -8,6 +8,7 @@ import {
   cleanFast,
   copyBytes,
   copyFast,
+  isBytes,
   mkAsync,
   type AsyncRunOpts,
   type AsyncSetup,
@@ -38,6 +39,7 @@ export type CipherFactory = ((key: TArg<Uint8Array>, ...args: unknown[]) => TRet
   blockLen: number;
   nonceLength?: number;
   tagLength?: number;
+  withAAD?: true;
   varSizeNonce?: boolean;
   getPlatform: () => string | undefined;
   getDefinition: () => CipherDef<any>;
@@ -55,6 +57,7 @@ export type CipherParams = {
   blockLen: number;
   nonceLength?: number;
   tagLength?: number;
+  withAAD?: true;
   varSizeNonce?: boolean;
 };
 
@@ -1085,7 +1088,14 @@ export const mkCipher = <Mod extends CipherMod>(
       const nonce = args[0] as Uint8Array;
       abytes(nonce, def.varSizeNonce ? undefined : def.nonceLength, 'nonce');
     }
-    if (def.tagLength && args[1] !== undefined) abytes(args[1] as Uint8Array, undefined, 'AAD');
+    const aadStart = def.nonceLength !== undefined ? 1 : 0;
+    // No-AAD constructors otherwise silently ignore byte args meant as AAD.
+    if (!def.withAAD) {
+      for (let i = aadStart; i < args.length; i++)
+        if (isBytes(args[i])) throw new Error('AAD not supported');
+    }
+    if (def.withAAD && args[aadStart] !== undefined)
+      abytes(args[aadStart] as Uint8Array, undefined, 'AAD');
     if (def.validate) def.validate(key, ...args);
     let used = false;
     const make = (dir: Dir) => {
@@ -1154,6 +1164,7 @@ export const mkCipher = <Mod extends CipherMod>(
     getPlatform: () => platform,
     getDefinition: () => def,
   });
+  if (def.withAAD) cipherFactory.withAAD = true;
   brandSet.add(cipherFactory);
   return Object.freeze(cipherFactory) as TRet<CipherFactory>;
 };
@@ -1185,6 +1196,14 @@ export const mkCipherAsync = <Mod extends CipherMod>(
   const init = init_ as (key: Uint8Array, ...args: unknown[]) => AsyncCipherImpl;
   const factory = ((key: TArg<Uint8Array>, ...args: unknown[]) => {
     abytes(key, undefined, 'key');
+    const aadStart = def.nonceLength !== undefined ? 1 : 0;
+    // Async wrappers share the sync no-AAD rule so WebCrypto ciphers cannot ignore AAD.
+    if (!def.withAAD) {
+      for (let i = aadStart; i < args.length; i++)
+        if (isBytes(args[i])) throw new Error('AAD not supported');
+    }
+    if (def.withAAD && args[aadStart] !== undefined)
+      abytes(args[aadStart] as Uint8Array, undefined, 'AAD');
     if (def.validate) def.validate(key, ...args);
     const impl = init(key, ...args);
     const mk = (run: TArg<(data: Uint8Array) => Promise<TRet<Uint8Array>>>) => {
@@ -1223,6 +1242,7 @@ export const mkCipherAsync = <Mod extends CipherMod>(
     getPlatform: () => platform,
     getDefinition: () => def,
   });
+  if (def.withAAD) factory.withAAD = true;
   if (isSupported) (factory as any).isSupported = isSupported;
   brandSet.add(factory as object);
   return Object.freeze(factory) as TRet<CipherFactory>;
@@ -1263,5 +1283,6 @@ export function mkCipherStub<Mod extends CipherMod>(
     tagLength: def.tagLength,
     varSizeNonce: def.varSizeNonce,
   });
+  if (def.withAAD) stub.withAAD = true;
   return Object.freeze(stub) as TRet<CipherFactory & CipherStub>;
 }

@@ -71,6 +71,11 @@ function test(name: string, { ofb }: any) {
     const c = withNonce ? fn(key, nonce, ...args) : fn(key, ...args);
     return { c, key, nonce, copy: { key: key.slice(), nonce: nonce.slice() } };
   };
+  const makeCipher = (opts: any, key: Uint8Array, nonce: Uint8Array, aad?: Uint8Array) => {
+    const { fn, withAAD, withNonce } = opts;
+    const args = withAAD ? [aad] : opts.args || [];
+    return withNonce ? fn(key, nonce, ...args) : fn(key, ...args);
+  };
   const overlapTest = (a: Uint8Array, b: Uint8Array, cb: any) => {
     const buffer = new Uint8Array(a.length + b.length);
     let inputPos = 0;
@@ -154,7 +159,7 @@ function test(name: string, { ofb }: any) {
           const AAD = unalign(randomBytes(64), i);
           const msg = unalign(new Uint8Array(2048).fill(255), i);
           if (checkBlockSize(opts, msg.length)) {
-            const cipher = fn(key, nonce, AAD);
+            const cipher = makeCipher(opts, key, nonce, AAD);
             const encrypted = unalign(cipher.encrypt(msg), i);
             const decrypted = cipher.decrypt(encrypted);
             eql(decrypted, msg);
@@ -166,7 +171,7 @@ function test(name: string, { ofb }: any) {
         const key = randomBytes(keyLen);
         const nonce = randomBytes(fn.nonceLength);
         const AAD = randomBytes(64);
-        let cipher = fn(key, nonce, AAD);
+        let cipher = makeCipher(opts, key, nonce, AAD);
         const pcksOutput = (len: number) => {
           const remaining = len % fn.blockSize;
           let left = fn.blockSize - remaining;
@@ -189,7 +194,7 @@ function test(name: string, { ofb }: any) {
           const key = randomBytes(keyLen);
           const nonce = randomBytes(fn.nonceLength);
           const AAD = randomBytes(64);
-          let cipher = fn(key, nonce, AAD);
+          let cipher = makeCipher(opts, key, nonce, AAD);
           const mayThrow = ['cbc', 'ctr', 'ecb'].map((i) => k.includes(i)).includes(true);
           const pkcs5 = ['cbc', 'ecb'].map((i) => k.includes(i)).includes(true);
           for (let fillByte = 0; fillByte < 256; fillByte++) {
@@ -198,21 +203,21 @@ function test(name: string, { ofb }: any) {
               if (fn.tagLength) outLen += fn.tagLength;
               if (k === 'xsalsa20poly1305') outLen += 16;
               if (pkcs5) outLen += pcksOutput(msg.length);
-              cipher = fn(key, nonce, AAD);
+              cipher = makeCipher(opts, key, nonce, AAD);
               const exp = cipher.encrypt(msg);
               const out = new Uint8Array(outLen);
-              cipher = fn(key, nonce, AAD);
+              cipher = makeCipher(opts, key, nonce, AAD);
               const res = cipher.encrypt(msg, out);
               eql(res, exp);
               eql(res, out.subarray(res.byteOffset, res.byteOffset + res.length));
               eql(res.buffer, out.buffer);
               out.fill(fillByte);
-              cipher = fn(key, nonce, AAD);
+              cipher = makeCipher(opts, key, nonce, AAD);
               const res2 = cipher.encrypt(msg, out);
               eql(res2, exp);
               eql(res2, out.subarray(res2.byteOffset, res2.byteOffset + res2.length));
               eql(res2.buffer, out.buffer);
-              cipher = fn(key, nonce, AAD);
+              cipher = makeCipher(opts, key, nonce, AAD);
               out.fill(fillByte);
               out.set(msg);
               const msg2 = out.subarray(0, msg.length);
@@ -221,7 +226,7 @@ function test(name: string, { ofb }: any) {
               overlapTest(msg2, out, (msg2: Uint8Array, out2: Uint8Array, all: Uint8Array) => {
                 all.fill(fillByte);
                 msg2.set(msg);
-                cipher = fn(key, nonce, AAD);
+                cipher = makeCipher(opts, key, nonce, AAD);
                 let newOut;
                 try {
                   newOut = cipher.encrypt(msg2, out2);
@@ -237,7 +242,7 @@ function test(name: string, { ofb }: any) {
               });
             }
             if (cipher.decrypt.length === 2) {
-              cipher = fn(key, nonce, AAD);
+              cipher = makeCipher(opts, key, nonce, AAD);
               const input = cipher.encrypt(msg);
               let outLen = msg.length;
               if (k.endsWith('xsalsa20poly1305')) outLen += 32 + 16;

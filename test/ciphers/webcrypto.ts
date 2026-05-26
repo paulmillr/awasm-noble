@@ -52,6 +52,29 @@ describe('webcrypto ciphers', () => {
       throws(() => web.gcm(key, nonce, bad as any), TypeError);
   });
 
+  should('advertises AAD support explicitly', () => {
+    eql(
+      { cbc: (web.cbc as any).withAAD, ctr: (web.ctr as any).withAAD, gcm: web.gcm.withAAD },
+      { cbc: undefined, ctr: undefined, gcm: true }
+    );
+    eql(
+      {
+        cbc: Object.hasOwn(web.cbc, 'withAAD'),
+        ctr: Object.hasOwn(web.ctr, 'withAAD'),
+        gcm: Object.hasOwn(web.gcm, 'withAAD'),
+      },
+      { cbc: false, ctr: false, gcm: true }
+    );
+  });
+
+  should('rejects AAD for no-AAD ciphers', () => {
+    const key = new Uint8Array(32).fill(7);
+    const nonce = new Uint8Array(16).fill(11);
+    const aad = new Uint8Array(16).fill(13);
+    throws(() => (web.cbc as any)(key, nonce, aad));
+    throws(() => (web.ctr as any)(key, nonce, aad));
+  });
+
   should('gcm accepts 16-byte nonces like the sync wrapper', async () => {
     const key = new Uint8Array(32).fill(7);
     const nonce = new Uint8Array(16).fill(11);

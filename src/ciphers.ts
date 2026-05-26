@@ -179,18 +179,23 @@ export const chacha12: TRet<CipherDef<TYPES.CHACHA12>> = /* @__PURE__ */ (() =>
     nonceLength: 12,
   }))();
 
-const arxAeadBase = (cfg: TArg<ArxInit>, tagLeft = false): TRet<CipherDef<any>> => ({
+const arxAeadBase = (
+  cfg: TArg<ArxInit>,
+  tagLeft = false,
+  withAAD = true
+): TRet<CipherDef<any>> => ({
   blockLen: 64,
   tagLength: 16,
+  ...(withAAD ? { withAAD: true as const } : {}),
   tagLeft,
   tagError: 'invalid tag',
   validate: (key, nonce, aad) => {
     validateArx(key, nonce as Uint8Array, undefined, cfg);
-    if (aad !== undefined) abytes(aad as Uint8Array, undefined, 'AAD');
+    if (withAAD && aad !== undefined) abytes(aad as Uint8Array, undefined, 'AAD');
   },
   init: (mod, dir, key, nonce, aad) => {
     const iv = nonce as Uint8Array;
-    const aadBytes = aad as Uint8Array | undefined;
+    const aadBytes = withAAD ? (aad as Uint8Array | undefined) : undefined;
     initArx(mod, key, iv, undefined, cfg);
     const [aadLo, aadHi] = splitLen(aadBytes ? aadBytes.length : 0);
     if (dir === 'encrypt') mod.encryptInit(aadLo, aadHi);
@@ -224,13 +229,13 @@ export const xchacha20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
     nonceLength: 24,
   }))();
 
-// XSalsa20-Poly1305 secretbox has no standard AAD; this inherits the
-// generic AEAD AAD slot as a local extension.
+// XSalsa20-Poly1305 secretbox has no standard AAD.
 export const xsalsa20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
   Object.freeze({
     .../* @__PURE__ */ arxAeadBase(
       { allowShortKeys: true, counterLength: 8, counterRight: true, extendNonce: true },
-      true
+      true,
+      false
     ),
     dataOffset: 32,
     nonceLength: 24,
@@ -239,7 +244,8 @@ export const xsalsa20poly1305: TRet<CipherDef<any>> = /* @__PURE__ */ (() =>
 const AES_LEN_ENC = 'aec/(cbc-ecb): unpadded plaintext with disabled padding';
 const AES_LEN_DEC = 'aes-(cbc/ecb).decrypt ciphertext should consist of blocks with size 16';
 const AES_PAD_EMPTY = 'aes/pcks5: empty ciphertext not allowed';
-const AES_PAD_BAD = 'aes/pcks5: wrong padding';
+// Match noble-ciphers invalid-padding wording for compatibility tests.
+const AES_PAD_BAD = 'aes: bad decrypt';
 
 const aesKey = (key: TArg<Uint8Array>) => {
   abytes(key, undefined, 'aes key');
@@ -394,6 +400,7 @@ export const gcm: TRet<CipherDef<TYPES.AES_GCM>> = {
   blockLen: 16,
   nonceLength: 12,
   tagLength: 16,
+  withAAD: true,
   varSizeNonce: true,
   noOutput: true,
   validate: (key, nonce, aad) => {
@@ -439,6 +446,7 @@ export const gcmsiv: TRet<CipherDef<TYPES.AES_GCMSIV>> = /* @__PURE__ */ (() => 
     blockLen: 16,
     nonceLength: 12,
     tagLength: 16,
+    withAAD: true,
     varSizeNonce: true,
     noOutput: true,
     noStream: true,
@@ -477,6 +485,7 @@ export const gcmsiv: TRet<CipherDef<TYPES.AES_GCMSIV>> = /* @__PURE__ */ (() => 
 export const aessiv: TRet<CipherDef<TYPES.AES_SIV>> = {
   blockLen: 16,
   tagLength: 16,
+  withAAD: true,
   tagLeft: true,
   noStream: true,
   multiPass: 2,

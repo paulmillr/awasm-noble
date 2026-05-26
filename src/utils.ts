@@ -1218,10 +1218,16 @@ export function managedNonce<T extends CipherWithNonce>(
       const decrypted = ciphertext.subarray(nonceLen);
       return fn(key, nonce, ...args).decrypt(decrypted);
     },
-  })) as RemoveNonce<T> & { blockSize?: number; nonceLength: number; tagLength?: number };
+  })) as RemoveNonce<T> & {
+    blockSize?: number;
+    nonceLength: number;
+    tagLength?: number;
+    withAAD?: true;
+  };
   // awasm tests and callers still treat managed wrappers as cipher factories, so preserve metadata.
   if ('blockSize' in fn) res.blockSize = (fn as any).blockSize;
   res.nonceLength = nonceLen;
   if ('tagLength' in fn) res.tagLength = (fn as any).tagLength;
+  if ((fn as any).withAAD) res.withAAD = true;
   return res as unknown as TRet<RemoveNonce<T>>;
 }

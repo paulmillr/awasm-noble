@@ -195,7 +195,7 @@ const test = (name: string, platform: any) => {
     { name: 'xsalsa20', fn: platform.xsalsa20, keyLens: [32] },
     { name: 'chacha20poly1305', fn: platform.chacha20poly1305, keyLens: [32], withAAD: true },
     { name: 'xchacha20poly1305', fn: platform.xchacha20poly1305, keyLens: [32], withAAD: true },
-    { name: 'xsalsa20poly1305', fn: platform.xsalsa20poly1305, keyLens: [32], withAAD: true },
+    { name: 'xsalsa20poly1305', fn: platform.xsalsa20poly1305, keyLens: [32] },
   ];
 
   describe(`Cipher chunks (${name})`, () => {
