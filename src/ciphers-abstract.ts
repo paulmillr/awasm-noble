@@ -3,6 +3,7 @@
  * @module
  */
 import {
+  abool,
   abytes,
   clean,
   cleanFast,
@@ -45,7 +46,16 @@ export type CipherFactory = ((key: TArg<Uint8Array>, ...args: unknown[]) => TRet
   getDefinition: () => CipherDef<any>;
   isSupported?: () => boolean | Promise<boolean>;
 };
-type CipherStub = { install: (impl: CipherFactory) => void };
+type InstallOpts = { onlyMissing?: boolean };
+/** Installable cipher stub used by the `stub` platform. */
+export type CipherStub = {
+  /**
+   * Install a branded cipher implementation into this stub.
+   * @param impl - Cipher implementation created by an awasm cipher constructor.
+   * @param opts - {@link InstallOpts}; `onlyMissing` leaves an existing implementation unchanged.
+   */
+  install: (impl: CipherFactory, opts?: InstallOpts) => void;
+};
 const brandSet = new WeakSet<object>();
 const isBranded = (x: unknown): x is object =>
   typeof x === 'function' || (typeof x === 'object' && x !== null)
@@ -1181,9 +1191,126 @@ const cipherSyncError = () => {
 const copyCipherOutput = (res: TArg<Uint8Array>, out?: TArg<Uint8Array>): TRet<Uint8Array> => {
   if (!out) return res as TRet<Uint8Array>;
   if (out.length < res.length) throw new Error('output is too small');
+  if (out === res) return out as TRet<Uint8Array>;
   out.set(res.subarray(0, res.length), 0);
   clean(res);
   return out as TRet<Uint8Array>;
+};
+
+export const mkCipherNoble = <Mod extends CipherMod>(
+  def_: TArg<CipherDef<Mod>>,
+  init_: TArg<(key: TArg<Uint8Array>, ...args: unknown[]) => Cipher>,
+  platform = 'noble'
+): TRet<CipherFactory> => {
+  const def = def_ as CipherDef<Mod>;
+  const init = init_ as (key: TArg<Uint8Array>, ...args: unknown[]) => Cipher;
+  const factory = ((key: TArg<Uint8Array>, ...args: unknown[]) => {
+    abytes(key, undefined, 'key');
+    if (def.nonceLength !== undefined) {
+      const nonce = args[0] as Uint8Array;
+      abytes(nonce, def.varSizeNonce ? undefined : def.nonceLength, 'nonce');
+    }
+    const aadStart = def.nonceLength !== undefined ? 1 : 0;
+    if (!def.withAAD) {
+      for (let i = aadStart; i < args.length; i++)
+        if (isBytes(args[i])) throw new Error('AAD not supported');
+    }
+    if (def.withAAD && args[aadStart] !== undefined)
+      abytes(args[aadStart] as Uint8Array, undefined, 'AAD');
+    if (def.validate) def.validate(key, ...args);
+    const impl = init(key, ...args);
+    let used = false;
+    const mk = (
+      dir: Dir,
+      run: TArg<(data: TArg<Uint8Array>, output?: TArg<Uint8Array>) => TRet<Uint8Array>>
+    ) => {
+      const fn = (data: TArg<Uint8Array>, output?: TArg<Uint8Array>) => {
+        abytes(data);
+        if (output !== undefined && def.noOutput) throw new Error('cipher output not supported');
+        if (output !== undefined) abytes(output, undefined, 'output');
+        if (dir === 'encrypt') {
+          if (used) throw new Error('cannot encrypt() twice with same key + nonce');
+          used = true;
+        }
+        const tagLen = def.tagLength || 0;
+        const exactLen =
+          tagLen && dir === 'encrypt'
+            ? data.length + tagLen
+            : tagLen && dir === 'decrypt'
+              ? data.length - tagLen
+              : data.length;
+        // Native tag-left wrappers either reject `out` or use a pretag buffer layout.
+        const runOut =
+          output !== undefined && !def.padding && !def.tagLeft && output.length === exactLen
+            ? output
+            : undefined;
+        const res = (
+          run as (data: TArg<Uint8Array>, output?: TArg<Uint8Array>) => TRet<Uint8Array>
+        )(data, runOut);
+        if (output && def.exactOutput && output.length !== res.length)
+          throw new Error(
+            '"output" expected Uint8Array of length ' + res.length + ', got: ' + output.length
+          );
+        return copyCipherOutput(res, output);
+      };
+      let runAsync:
+        | ReturnType<
+            typeof mkAsync<
+              [Uint8Array, Uint8Array | undefined, AsyncRunOpts | undefined],
+              Uint8Array
+            >
+          >
+        | undefined;
+      Object.assign(fn, {
+        async: (data: TArg<Uint8Array>, output?: TArg<Uint8Array>, opts?: TArg<AsyncRunOpts>) =>
+          (
+            runAsync ||
+            (runAsync = mkAsync(function* (
+              setup: TArg<AsyncSetup>,
+              data: TArg<Uint8Array>,
+              output?: TArg<Uint8Array>,
+              opts?: TArg<AsyncRunOpts>
+            ) {
+              const setupMode = setup as AsyncSetup & { isAsync?: boolean };
+              if (!setupMode.isAsync && !opts?.onProgress) return fn(data, output);
+              const tick = !setupMode.isAsync
+                ? !opts?.onProgress
+                  ? (setupMode({ total: 0 }), (_inc?: number) => false)
+                  : setupMode({ total: data.length, onProgress: opts.onProgress })
+                : setupMode({
+                    total: data.length,
+                    asyncTick: opts?.asyncTick,
+                    onProgress: opts?.onProgress,
+                    nextTick: opts?.nextTick,
+                  });
+              const out = fn(data, output);
+              if ((setupMode.isAsync || !!opts?.onProgress) && tick(data.length)) yield;
+              return out;
+            }))
+          ).async(data, output, opts),
+        create: () => {
+          throw new Error('streaming is not supported');
+        },
+      });
+      return fn;
+    };
+    return {
+      encrypt: mk('encrypt', impl.encrypt),
+      decrypt: mk('decrypt', impl.decrypt),
+    } as TRet<Cipher>;
+  }) as CipherFactory;
+  Object.assign(factory, {
+    blockSize: def.blockLen,
+    blockLen: def.blockLen,
+    nonceLength: def.nonceLength,
+    tagLength: def.tagLength,
+    varSizeNonce: def.varSizeNonce,
+    getPlatform: () => platform,
+    getDefinition: () => def,
+  });
+  if (def.withAAD) factory.withAAD = true;
+  brandSet.add(factory as object);
+  return Object.freeze(factory) as TRet<CipherFactory>;
 };
 
 export const mkCipherAsync = <Mod extends CipherMod>(
@@ -1272,7 +1399,10 @@ export function mkCipherStub<Mod extends CipherMod>(
       const impl = inner as CipherFactory;
       return impl.getDefinition();
     },
-    install: (impl: TArg<CipherFactory>) => {
+    install: (impl: TArg<CipherFactory>, opts = {} as TArg<InstallOpts>) => {
+      const { onlyMissing } = opts as InstallOpts;
+      if (onlyMissing !== undefined) abool(onlyMissing);
+      if (onlyMissing && inner !== undefined) return;
       if (!isBranded(impl)) throw new Error('install: non-branded implementation');
       if (impl.getDefinition() !== def) throw new Error('wrong implementation definition');
       inner = impl;

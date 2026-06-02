@@ -22,20 +22,22 @@ const DEF_COMPILER_OPTS = {
 };
 const LICENSE = fs.readFileSync(new URL('../LICENSE', import.meta.url), 'utf8').trimEnd();
 const LICENSE_COMMENT = `/*!\n${LICENSE}\n*/\n`;
-const TARGET_TYPE_IMPORTS = [
-  `import type { OutputOpts, HashStream, HashDef, HashInstance } from '../../hashes-abstract.ts';`,
-  `import type { TArg, TRet, Asyncify, KDFInput } from '../../utils.ts';`,
-  `import type { BlakeOpts, Blake2Opts, Blake3Opts } from '../../hashes.ts';`,
-  `import type { Cipher, CipherDef, CipherFactory } from '../../ciphers-abstract.ts';`,
-  `import type { KDF, ScryptOpts, ArgonOpts } from '../../kdf.ts';`,
-].join('\n');
-const TARGET_TYPE_EXPORTS = [
-  `export type { OutputOpts, HashStream, HashDef, HashInstance };`,
-  `export type { TArg, TRet, Asyncify, KDFInput };`,
-  `export type { BlakeOpts, Blake2Opts, Blake3Opts };`,
-  `export type { Cipher, CipherDef, CipherFactory };`,
-  `export type { KDF, ScryptOpts, ArgonOpts };`,
-].join('\n');
+const targetTypeImports = (ver: string) =>
+  [
+    `import type { OutputOpts, HashBatchOpts, HashState, HashStream, HashDef, HashInstance${ver === 'stub' ? ', Stub as HashStub' : ''} } from '../../hashes-abstract.ts';`,
+    `import type { TArg, TRet, Asyncify, KDFInput } from '../../utils.ts';`,
+    `import type { BlakeOpts, Blake2Opts, Blake3Opts } from '../../hashes.ts';`,
+    `import type { Cipher, CipherDef, CipherFactory${ver === 'stub' ? ', CipherStub' : ''} } from '../../ciphers-abstract.ts';`,
+    `import type { KDF, ScryptOpts, ArgonOpts } from '../../kdf.ts';`,
+  ].join('\n');
+const targetTypeExports = (ver: string) =>
+  [
+    `export type { OutputOpts, HashBatchOpts, HashState, HashStream, HashDef, HashInstance${ver === 'stub' ? ', HashStub' : ''} };`,
+    `export type { TArg, TRet, Asyncify, KDFInput };`,
+    `export type { BlakeOpts, Blake2Opts, Blake3Opts };`,
+    `export type { Cipher, CipherDef, CipherFactory${ver === 'stub' ? ', CipherStub' : ''} };`,
+    `export type { KDF, ScryptOpts, ArgonOpts };`,
+  ].join('\n');
 // JSR slow-types requires explicit public annotations on generated wrappers too.
 // Keep the helper aliases local to generated files so public signatures stay readable.
 const TARGET_TYPE_HELPERS = [
@@ -47,12 +49,13 @@ const TARGET_TYPE_HELPERS = [
 ].join('\n');
 const HASH_BLAKE1 = new Set(['blake224', 'blake256', 'blake384', 'blake512']);
 const HASH_MAC = new Set(['poly1305', 'cmac', 'ghash', 'polyval']);
-const hashType = (name: string) => {
-  if (HASH_BLAKE1.has(name)) return 'TRet<HashInstance<BlakeOpts>>';
-  if (name === 'blake2s' || name === 'blake2b') return 'TRet<HashInstance<Blake2Opts>>';
-  if (name === 'blake3') return 'TRet<HashInstance<Blake3Opts>>';
-  if (HASH_MAC.has(name)) return 'TRet<HashInstance<MACOpts>>';
-  return 'TRet<HashInstance<undefined>>';
+const hashType = (name: string, stub = false) => {
+  const wrap = (opts: string) => `TRet<HashInstance<${opts}>${stub ? ` & HashStub<${opts}>` : ''}>`;
+  if (HASH_BLAKE1.has(name)) return wrap('BlakeOpts');
+  if (name === 'blake2s' || name === 'blake2b') return wrap('Blake2Opts');
+  if (name === 'blake3') return wrap('Blake3Opts');
+  if (HASH_MAC.has(name)) return wrap('MACOpts');
+  return wrap('undefined');
 };
 // Should be avail in worker
 const MODULES_REGISTRY: Record<string, Module> = {
@@ -415,10 +418,7 @@ const example = (name: string, kind: keyof typeof DOC_TAGS) => {
   const byName = DOC_EXAMPLES[name];
   if (byName) return byName;
   if (kind === 'hash') {
-    return [
-      `import { ${name} } from '@awasm/noble';`,
-      `${name}(new Uint8Array([1, 2, 3]));`,
-    ];
+    return [`import { ${name} } from '@awasm/noble';`, `${name}(new Uint8Array([1, 2, 3]));`];
   }
   throw new Error(`missing @example for public export: ${name}`);
 };
@@ -551,7 +551,7 @@ async function main() {
         }
         instanceAdd(
           name,
-          `export const ${name}: ${hashType(name)} = /* @__PURE__ */ ${instance};`
+          `export const ${name}: ${hashType(name, ver === 'stub')} = /* @__PURE__ */ ${instance};`
         );
       }
       for (const name in CipherDefinitions) {
@@ -578,7 +578,10 @@ async function main() {
         } else if (ver === 'stub') {
           instance = `mkCipherStub(def_${name})`;
         }
-        instanceAdd(name, `export const ${name}: TRet<CipherFactory> = /* @__PURE__ */ ${instance};`);
+        instanceAdd(
+          name,
+          `export const ${name}: TRet<CipherFactory${ver === 'stub' ? ' & CipherStub' : ''}> = /* @__PURE__ */ ${instance};`
+        );
       }
       for (const name in GenericDefinitions) {
         const { mod, deps, stub } = GenericDefinitions[name];
@@ -617,10 +620,10 @@ async function main() {
       );
       write(
         `${targetDir(ver)}/index.ts`,
-        `${TARGET_TYPE_IMPORTS}
+        `${targetTypeImports(ver)}
 ${Array.from(imports).join('\n')}
 ${TARGET_TYPE_HELPERS}
-${TARGET_TYPE_EXPORTS}
+${targetTypeExports(ver)}
 ${Array.from(instances).join('\n')}`
       );
     }

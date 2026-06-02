@@ -66,6 +66,7 @@ for (const k in PLATFORMS) webcrypto(k, PLATFORMS[k], BT);
 for (const k in PLATFORMS) argon2(k, PLATFORMS[k], BT);
 await import('./blake3.test.ts');
 await import('./hash-async.test.ts');
+await import('./prefix-state.test.ts');
 await import('./webcrypto.ts');
 await import('./errors.test.ts');
 await import('./zero.test.ts');

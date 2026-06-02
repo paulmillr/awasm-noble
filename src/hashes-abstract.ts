@@ -3,6 +3,7 @@
  * @module
  */
 import {
+  abool,
   abytes,
   anumber,
   clean,
@@ -125,9 +126,73 @@ export type OutputOpts = {
   /** Requested digest length in bytes. */
   dkLen?: number; // outLen, but compat with old API.
 };
+/** Options accepted by multi-input hash APIs: `chunks` and `parallel`. */
+export type HashBatchOpts = OutputOpts & {
+  /**
+   * Opaque state from `create().exportState()`.
+   * The only supported use is passing it back to the same hash, platform, and library version.
+   */
+  prefixState?: TArg<HashState>;
+};
+/** Options accepted by `parallel`, including caller-owned per-lane output views. */
+export type HashParallelOpts = Omit<OutputOpts, 'out'> & {
+  /** Optional flat output buffer or one exact-size destination view per input lane. */
+  out?: TArg<Uint8Array | Uint8Array[]>;
+  /**
+   * Opaque state from `create().exportState()`.
+   * The only supported use is passing it back to the same hash, platform, and library version.
+   */
+  prefixState?: TArg<HashState>;
+};
+type ParallelOutput = {
+  dkLen: number;
+  out: TRet<Uint8Array>[];
+};
+const checkParallelOutput = <Opts>(
+  opts: TArg<Opts & HashParallelOpts>,
+  count: number,
+  outputLen: number,
+  canXOF?: boolean
+): TRet<ParallelOutput> => {
+  const raw = (isBytes(opts) ? {} : opts || {}) as HashParallelOpts;
+  if (raw.dkLen !== undefined) anumber(raw.dkLen, 'opts.dkLen');
+  if (raw.outPos !== undefined) anumber(raw.outPos, 'opts.outPos');
+  const dkLen = (raw.dkLen === undefined ? outputLen : raw.dkLen) | 0;
+  if (!canXOF && dkLen > outputLen)
+    throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${dkLen}`);
+  if (Array.isArray(raw.out)) {
+    if (raw.outPos !== undefined && raw.outPos !== 0)
+      throw new Error('outPos is not supported with output view arrays');
+    if (raw.out.length !== count)
+      throw new RangeError('output array length must match messages length');
+    for (let i = 0; i < count; i++) abytes(raw.out[i], dkLen, 'output');
+    return { dkLen, out: raw.out as TRet<Uint8Array>[] } as TRet<ParallelOutput>;
+  }
+  if (raw.out !== undefined) abytes(raw.out, undefined, 'output');
+  const out = raw.out || new Uint8Array(dkLen * count);
+  const outPos = (raw.outPos === undefined ? 0 : raw.outPos) | 0;
+  if (outPos < 0 || outPos + dkLen * count > out.length)
+    throw new RangeError('out/outPos too small');
+  const slices: TRet<Uint8Array>[] = [];
+  for (let i = 0; i < count; i++) {
+    const pos = outPos + i * dkLen;
+    slices.push(out.subarray(pos, pos + dkLen) as TRet<Uint8Array>);
+  }
+  return { dkLen, out: slices } as TRet<ParallelOutput>;
+};
 
 type CreateOutputOpts = Pick<OutputOpts, 'dkLen'>;
 type CreateOpts<Opts> = MergeOpts<Opts, CreateOutputOpts>;
+
+declare const HASH_STATE: unique symbol;
+/**
+ * Opaque exported hash state; not necessarily a byte array.
+ * The value is an owned cleanup handle for one hash/platform/version only.
+ */
+export type HashState = {
+  /** Internal brand that prevents treating arbitrary values as exported hash states. */
+  readonly [HASH_STATE]: true;
+};
 
 /** Streaming hash instance returned by {@link HashInstance.create}. */
 export type HashStream<Opts> = {
@@ -161,6 +226,11 @@ export type HashStream<Opts> = {
   _cloneInto(to?: HashStream<Opts>): HashStream<Opts>;
   /** Clone the current stream state. */
   clone(): HashStream<Opts>;
+  /**
+   * Export an opaque state that can be reused as `prefixState` by this exact hash/platform/version.
+   * Callers must eventually pass it to `hash.cleanState(state)`.
+   */
+  exportState(): TRet<HashState>;
   // Fixed-size in-place digest: writes only the digest prefix and returns nothing.
   /**
    * Finalize the stream and write the fixed-size digest into `buf`.
@@ -184,13 +254,15 @@ export type HashInstance<Opts> = Asyncify<
 > & {
   // process multiple messages without concatBytes
   chunks: Asyncify<
-    (chunks: TArg<Uint8Array[]>, opts?: MergeOpts<Opts, OutputOpts>) => TRet<Uint8Array>
+    (chunks: TArg<Uint8Array[]>, opts?: MergeOpts<Opts, HashBatchOpts>) => TRet<Uint8Array>
   >;
   parallel: Asyncify<
-    (chunks: TArg<Uint8Array[]>, opts?: MergeOpts<Opts, OutputOpts>) => TRet<Uint8Array[]>
+    (chunks: TArg<Uint8Array[]>, opts?: MergeOpts<Opts, HashParallelOpts>) => TRet<Uint8Array[]>
   >;
   // create() feeds initHash(), so dkLen must be valid before update().
   create: (opts?: CreateOpts<Opts>) => HashStream<Opts>;
+  /** Wipe and invalidate an opaque state returned by `create().exportState()`. */
+  cleanState: (state: TArg<HashState>) => void;
   getPlatform: () => string | undefined;
   getDefinition: () => HashDef<any, any>;
   isSupported?: () => boolean | Promise<boolean>;
@@ -226,20 +298,24 @@ export function mkHash<Mod extends HashMod, Opts>(
     msg: TArg<Uint8Array>,
     opts?: TArg<MergeOpts<Opts, OutputOpts> & AsyncRunOpts>
   ) => Promise<TRet<Uint8Array>>;
-  let chunksImpl: (parts: TArg<Uint8Array[]>, opts?: TArg<Opts & OutputOpts>) => TRet<Uint8Array>;
+  let chunksImpl: (
+    parts: TArg<Uint8Array[]>,
+    opts?: TArg<Opts & HashBatchOpts>
+  ) => TRet<Uint8Array>;
   let chunksAsyncImpl: (
     parts: TArg<Uint8Array[]>,
-    opts?: TArg<Opts & OutputOpts & AsyncRunOpts>
+    opts?: TArg<Opts & HashBatchOpts & AsyncRunOpts>
   ) => Promise<TRet<Uint8Array>>;
   let parallelImpl: (
     chunks: TArg<Uint8Array[]>,
-    opts?: TArg<Opts & OutputOpts>
+    opts?: TArg<Opts & HashParallelOpts>
   ) => TRet<Uint8Array[]>;
   let parallelAsyncImpl: (
     chunks: TArg<Uint8Array[]>,
-    opts?: TArg<Opts & OutputOpts & AsyncRunOpts>
+    opts?: TArg<Opts & HashParallelOpts & AsyncRunOpts>
   ) => Promise<TRet<Uint8Array[]>>;
   let createImpl: (opts?: TArg<CreateOpts<Opts>>) => TRet<HashStream<Opts>>;
+  let cleanStateImpl: (state: TArg<HashState>) => void;
   let inited = false;
   function lazyInit() {
     if (inited) throw new Error('second lazyInit call');
@@ -248,11 +324,14 @@ export function mkHash<Mod extends HashMod, Opts>(
     const { processBlocks, processOutBlocks, padding, reset } = mod;
     const BUFFER: Uint8Array = mod.segments.buffer;
     const STATE: Uint8Array = mod.segments.state_chunks[0];
+    const STATE_CHUNKS: ReadonlyArray<Uint8Array> = mod.segments.state_chunks;
     const parallelChunks = mod.segments.state_chunks.length;
     const maxBlocks = Math.floor(BUFFER.length / blockLen);
     const chunks = maxBlocks - 2; // 2 for padding
     if (chunks < 1) throw new Error('wrong chunks');
     const maxOutBlocks = Math.floor(BUFFER.length / outBlockLen);
+    type PrefixState = { state: Uint8Array; buf: Uint8Array };
+    const prefixStates = new WeakSet<Uint8Array>();
 
     function initHash(opts: TArg<MergeOpts<Opts, OutputOpts>>, batchPos = 0) {
       const rawOpts = opts as MergeOpts<Opts, OutputOpts>;
@@ -304,11 +383,16 @@ export function mkHash<Mod extends HashMod, Opts>(
         pos += take;
       } while (pos < msg.length); // no extra final take=0 pass
     }
-    function processMessages(parts: TArg<Uint8Array[]>, blocks: number) {
+    function processMessages(
+      parts: TArg<Uint8Array[]>,
+      blocks: number,
+      prefix?: TArg<PrefixState>
+    ) {
       // TODO: cleanup, garbage.
       const cap = (chunks * blockLen) | 0; // max bytes per batch
       // total length to keep isLast identical to single-buffer path
-      let totalLen = 0;
+      const prefixLen = prefix ? prefix.buf.length : 0;
+      let totalLen = prefixLen;
       for (let k = 0; k < parts.length; k++) totalLen += parts[k].length;
       // Preloaded blocks from init():
       // those are full blocks, already in BUFFER, and must NOT be treated as 'last'.
@@ -327,6 +411,11 @@ export function mkHash<Mod extends HashMod, Opts>(
         const take = Math.min(totalLen - pos, cap) | 0;
         // fill BUFFER[0..take) from parts[idx..] without concat
         let written = 0;
+        if (prefix && pos < prefixLen) {
+          const n = Math.min(take, prefixLen - pos) | 0;
+          copyFast(BUFFER, written, prefix.buf, pos, n);
+          written += n;
+        }
         while (written < take) {
           const cur = parts[idx];
           const rem = (cur.length - off) | 0;
@@ -359,13 +448,27 @@ export function mkHash<Mod extends HashMod, Opts>(
       chunkPos: number,
       chunkLen: number,
       blocks: number,
-      maxBlocks: number
+      maxBlocks: number,
+      prefix?: TArg<PrefixState>
     ) {
       const chunks = maxBlocks - 2;
       if (chunks < 1) throw new Error('wrong chunks');
+      const prefixLen = prefix ? prefix.buf.length : 0;
+      const msgLen = msg[chunkPos].length;
+      const totalLen = prefixLen + msgLen;
+      const copyLane = (dst: number, lane: TArg<Uint8Array>, pos: number, take: number) => {
+        let written = 0;
+        if (prefix && pos < prefixLen) {
+          const n = Math.min(take, prefixLen - pos);
+          copyFast(BUFFER, dst, prefix.buf, pos, n);
+          written += n;
+        }
+        if (written < take)
+          copyFast(BUFFER, dst + written, lane, pos + written - prefixLen, take - written);
+      };
       // Caller validates per-group size equality before touching module state.
       if (blocks > 0) {
-        if (msg[chunkPos].length === 0) {
+        if (totalLen === 0) {
           // No more message input: do a normal finalization over an empty tail.
           // Keep 'left' consistent with the wrapper contract for take=0: left=0.
           const padBlocks = padding(0, blocks * blockLen, maxBlocks, 0, blockLen, suffix);
@@ -380,11 +483,11 @@ export function mkHash<Mod extends HashMod, Opts>(
       }
       let pos = 0;
       do {
-        const take = Math.min(msg[chunkPos].length - pos, chunks * blockLen);
+        const take = Math.min(totalLen - pos, chunks * blockLen);
         for (let i = 0; i < chunkLen; i++) {
-          copyFast(BUFFER, i * maxBlocks * blockLen, msg[chunkPos + i], pos, take);
+          copyLane(i * maxBlocks * blockLen, msg[chunkPos + i], pos, take);
         }
-        const isLast = pos + take == msg[chunkPos].length;
+        const isLast = pos + take == totalLen;
         // How many full/partial blocks do we have here? Can be zero.
         let blocks = Math.ceil(take / blockLen);
         // How much space remains? blockLen-rem, except rem=0.
@@ -401,7 +504,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         }
         processBlocks(0, chunkLen, blocks, maxBlocks, blockLen, isLast ? 1 : 0, left, padBlocks);
         pos += take;
-      } while (pos < msg[chunkPos].length); // no extra final take=0 pass
+      } while (pos < totalLen); // no extra final take=0 pass
       return;
     }
 
@@ -455,41 +558,14 @@ export function mkHash<Mod extends HashMod, Opts>(
       // NOTE: it would be nice to return slices subarray here, but it is not free!
       return { maxWritten, out } as TRet<{ maxWritten: number; out: TRet<Uint8Array> }>;
     }
-    function checkOutputOptsParallel(
-      opts = {} as TArg<Opts & OutputOpts>,
-      chunkPos: number,
-      chunkLen: number
-    ): TRet<{ dkLen: number; out: TRet<Uint8Array>[] }> {
-      const raw = opts as Opts & OutputOpts;
-      if (raw.dkLen !== undefined) anumber(raw.dkLen, 'opts.dkLen');
-      if (raw.outPos !== undefined) anumber(raw.outPos, 'opts.outPos');
-      if (raw.out !== undefined) abytes(raw.out, undefined, 'output');
-      const dkLen = (raw.dkLen === undefined ? outputLen : raw.dkLen) | 0;
-      if (!canXOF && dkLen > outputLen)
-        throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${dkLen}`);
-      const out = raw.out || new Uint8Array(dkLen * chunkLen);
-      const outPos = (raw.outPos === undefined ? 0 : raw.outPos) | 0;
-      const base = raw.out ? outPos + chunkPos * dkLen : outPos;
-      if (outPos < 0 || base + dkLen * chunkLen > out.length)
-        throw new RangeError('out/outPos too small');
-      const slices: TRet<Uint8Array>[] = [];
-      for (let i = 0; i < chunkLen; i++)
-        slices.push(out.subarray(base + i * dkLen, base + (i + 1) * dkLen) as TRet<Uint8Array>);
-      return { dkLen, out: slices } as TRet<{ dkLen: number; out: TRet<Uint8Array>[] }>;
-    }
     function processOutputParallel(
-      opts = {} as TArg<Opts & OutputOpts>,
-      _chunkPos: number,
       chunkLen: number,
       maxOutBlocks: number,
-      checked: TArg<ReturnType<typeof checkOutputOptsParallel>> = checkOutputOptsParallel(
-        opts,
-        _chunkPos,
-        chunkLen
-      )
+      checked: TArg<ParallelOutput>,
+      outOffset: number
     ): TRet<{ out: TRet<Uint8Array>[]; maxWritten: number }> {
       const chunks = maxOutBlocks;
-      const { dkLen, out } = checked as ReturnType<typeof checkOutputOptsParallel>;
+      const { dkLen, out } = checked as ParallelOutput;
       let maxWritten = 0;
       const batch = chunks | 0;
       const blocksTotal = ((dkLen + outBlockLen - 1) / outBlockLen) | 0; // ceil div
@@ -503,7 +579,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         const need = dkLen - produced;
         const takeBytes = need < emitted ? need : emitted;
         for (let i = 0; i < chunkLen; i++) {
-          copyFast(out[i], produced, BUFFER, i * outBlockLen * maxOutBlocks, takeBytes);
+          copyFast(out[outOffset + i], produced, BUFFER, i * outBlockLen * maxOutBlocks, takeBytes);
           // Some modules (e.g. blake3) may write full output blocks even when only part is copied out.
           // Track emitted block span for reset() so unread bytes are also zeroized.
           maxWritten = Math.max(maxWritten, takeBytes, emitted);
@@ -514,6 +590,20 @@ export function mkHash<Mod extends HashMod, Opts>(
       // NOTE: it would be nice to return slices subarray here, but it is not free!
       return { out, maxWritten } as TRet<{ out: TRet<Uint8Array>[]; maxWritten: number }>;
     }
+    const stateBytes = (state: TArg<HashState>) => {
+      if (!isBytes(state)) throw new Error('prefixState is not from this hash');
+      if (state.length < STATE.length) throw new Error('prefixState is too short');
+      // Byte-state backends serialize only `state || partialBlock`; a full block must be flushed.
+      if (state.length >= STATE.length + blockLen) throw new Error('prefixState is too long');
+      if (!prefixStates.has(state)) throw new Error('prefixState is not from this hash');
+      return state;
+    };
+    const prefixState = (opts = {} as TArg<Opts & (HashBatchOpts | HashParallelOpts)>) => {
+      const raw = opts as Opts & (HashBatchOpts | HashParallelOpts);
+      if (raw.prefixState === undefined) return;
+      const state = stateBytes(raw.prefixState);
+      return { state: state.subarray(0, STATE.length), buf: state.subarray(STATE.length) };
+    };
     class StreamHash {
       canXOF: boolean;
       blockLen: number;
@@ -698,6 +788,27 @@ export function mkHash<Mod extends HashMod, Opts>(
       clone(): this {
         return this._cloneInto();
       }
+      exportState(): TRet<HashState> {
+        if (this.destroyed) throw new Error('Hash instance has been destroyed');
+        if (this.finished) throw new Error('Hash#digest() has already been called');
+        // update() keeps one full tail block unprocessed for finalization; export must absorb it
+        // so a full-block prefix is represented only by the engine state plus a short leftover.
+        if (this.pos === blockLen) {
+          this.restoreState();
+          copyFast(BUFFER, 0, this.buf, 0, blockLen);
+          processBlocks(0, 1, 1, maxBlocks, blockLen, 0, 0, 0);
+          this.saveState();
+          this.pos = 0;
+          this.buf.fill(0);
+          reset(0, 1, 0, outBlockLen, maxOutBlocks);
+        }
+        // Returned bytes are exactly `state || partialBlock`, with no outputLen, pos, or header.
+        const out = new Uint8Array(this.state.length + this.pos);
+        out.set(this.state);
+        if (this.pos) out.set(this.buf.subarray(0, this.pos), this.state.length);
+        prefixStates.add(out);
+        return out as unknown as TRet<HashState>;
+      }
     }
     const hashSync = (msg: TArg<Uint8Array>, opts = {} as MergeOpts<Opts, OutputOpts>) => {
       abytes(msg);
@@ -708,60 +819,73 @@ export function mkHash<Mod extends HashMod, Opts>(
       reset(0, 1, maxWritten, outBlockLen, maxOutBlocks);
       return res;
     };
-    const chunksSync = (parts: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
+    const chunksSync = (parts: TArg<Uint8Array[]>, opts = {} as Opts & HashBatchOpts) => {
       if (!Array.isArray(parts)) throw new Error('expected array of messages');
-      for (const p of parts) abytes(p);
+      let total = 0;
+      for (const p of parts) {
+        abytes(p);
+        total += p.length;
+      }
+      const prefix = prefixState(opts);
+      if (prefix && total === 0) throw new Error('prefixState requires a non-empty message');
       const outChecked = checkOutputOpts(opts);
-      const { blocks } = initHash(opts);
-      processMessages(parts, blocks);
+      if (prefix) {
+        reset(0, 1, 0, outBlockLen, maxOutBlocks);
+        copyFast(STATE, 0, prefix.state, 0, prefix.state.length);
+        processMessages(parts, 0, prefix);
+      } else {
+        const { blocks } = initHash(opts);
+        processMessages(parts, blocks);
+      }
       const { out: res, maxWritten } = processOutput(opts, outChecked);
       reset(0, 1, maxWritten, outBlockLen, maxOutBlocks);
       return res;
     };
-    const parallelSync = (chunks: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
-      const out = [];
-      const outChecked = [];
+    const parallelSync = (chunks: TArg<Uint8Array[]>, opts = {} as Opts & HashParallelOpts) => {
+      if (!Array.isArray(chunks)) throw new Error('expected array of messages');
+      const prefix = prefixState(opts);
+      if (prefix && chunks.length === 0)
+        throw new Error('prefixState requires a non-empty message');
       // At least 3 blocks (for padding).
       const maxGroups = Math.floor(BUFFER.length / (blockLen * 3));
       const maxOutGroups = Math.floor(BUFFER.length / outBlockLen);
       // Validate user input first. Wrong input must throw before touching module state/memory.
       for (let i = 0; i < chunks.length; i += parallelChunks) {
         const groupLen = Math.min(parallelChunks, chunks.length - i, maxGroups, maxOutGroups);
-        outChecked.push(checkOutputOptsParallel(opts, i, groupLen));
         for (let j = 0; j < groupLen; j++)
           if (!isBytes(chunks[i + j]))
             throw new Error(`expected Uint8Array, got type=${typeof chunks[i + j]}`);
+        if (prefix && chunks[i].length === 0)
+          throw new Error('prefixState requires a non-empty message');
         for (let j = 1; j < groupLen; j++) {
           if (chunks[i + j].length !== chunks[i].length)
             throw new Error('different sizes inside chunk');
         }
       }
+      const outChecked = checkParallelOutput(opts, chunks.length, outputLen, canXOF);
       for (let i = 0; i < chunks.length; i += parallelChunks) {
         const groupLen = Math.min(parallelChunks, chunks.length - i, maxGroups, maxOutGroups);
         const maxBlocks = Math.floor(BUFFER.length / (blockLen * groupLen));
         const maxOutBlocks = Math.floor(BUFFER.length / (outBlockLen * groupLen));
         let blocks = 0;
-        if (init) {
-          const i = init(0, maxBlocks, mod, hash, opts);
+        if (prefix) {
+          reset(0, groupLen, 0, outBlockLen, maxOutBlocks);
+          for (let j = 0; j < groupLen; j++)
+            copyFast(STATE_CHUNKS[j], 0, prefix.state, 0, prefix.state.length);
+        } else if (init) {
+          const i = init(0, maxBlocks, mod, hash, opts as any);
           if (i && i.blocks !== undefined) blocks = i.blocks;
           for (let j = 0; j < groupLen; j++) {
-            const t = init(j, maxBlocks, mod, hash, opts);
+            const t = init(j, maxBlocks, mod, hash, opts as any);
             if ((t && t.blocks) !== (i && i.blocks))
               throw new Error('inconsistent init blocks inside parallel group');
           }
         }
-        processMessageParallel(chunks, i, groupLen, blocks, maxBlocks);
-        const { out: res, maxWritten } = processOutputParallel(
-          opts,
-          i,
-          groupLen,
-          maxOutBlocks,
-          outChecked[(i / parallelChunks) | 0]
-        );
-        out.push(...res);
+        processMessageParallel(chunks, i, groupLen, blocks, maxBlocks, prefix);
+        const { maxWritten } = processOutputParallel(groupLen, maxOutBlocks, outChecked, i);
         reset(0, groupLen, maxWritten, outBlockLen, maxOutBlocks);
       }
-      return out;
+      return outChecked.out;
     };
     const setupTick = (
       setup: TArg<AsyncSetup & { isAsync?: boolean }>,
@@ -796,7 +920,7 @@ export function mkHash<Mod extends HashMod, Opts>(
     const chunksRun = mkAsync(function* (
       setup: TArg<AsyncSetup>,
       parts: TArg<Uint8Array[]>,
-      opts = {} as Opts & OutputOpts & AsyncRunOpts
+      opts = {} as Opts & HashBatchOpts & AsyncRunOpts
     ) {
       const setupMode = setup as AsyncSetup & { isAsync?: boolean };
       if (!setupMode.isAsync && !opts?.onProgress) return chunksSync(parts, opts);
@@ -810,7 +934,7 @@ export function mkHash<Mod extends HashMod, Opts>(
     const parallelRun = mkAsync(function* (
       setup: TArg<AsyncSetup>,
       parts: TArg<Uint8Array[]>,
-      opts = {} as Opts & OutputOpts & AsyncRunOpts
+      opts = {} as Opts & HashParallelOpts & AsyncRunOpts
     ) {
       const setupMode = setup as AsyncSetup & { isAsync?: boolean };
       if (!setupMode.isAsync && !opts?.onProgress) return parallelSync(parts, opts);
@@ -832,28 +956,28 @@ export function mkHash<Mod extends HashMod, Opts>(
         ? hashRun.async(msg, rawOpts)
         : hashSync(msg, rawOpts);
     };
-    chunksImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & OutputOpts>) =>
-      chunksSync(parts, opts as Opts & OutputOpts);
+    chunksImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) =>
+      chunksSync(parts, opts as Opts & HashBatchOpts);
     chunksAsyncImpl = async (
       parts: TArg<Uint8Array[]>,
-      opts?: TArg<Opts & OutputOpts & AsyncRunOpts>
+      opts?: TArg<Opts & HashBatchOpts & AsyncRunOpts>
     ) => {
-      const rawOpts = opts as (Opts & OutputOpts & AsyncRunOpts) | undefined;
-      if (!rawOpts) return chunksSync(parts, {} as Opts & OutputOpts);
+      const rawOpts = opts as (Opts & HashBatchOpts & AsyncRunOpts) | undefined;
+      if (!rawOpts) return chunksSync(parts, {} as Opts & HashBatchOpts);
       return rawOpts.asyncTick !== undefined ||
         rawOpts.onProgress !== undefined ||
         rawOpts.nextTick !== undefined
         ? chunksRun.async(parts, rawOpts)
         : chunksSync(parts, rawOpts);
     };
-    parallelImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & OutputOpts>) =>
-      parallelSync(parts, opts as Opts & OutputOpts);
+    parallelImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashParallelOpts>) =>
+      parallelSync(parts, opts as Opts & HashParallelOpts);
     parallelAsyncImpl = async (
       parts: TArg<Uint8Array[]>,
-      opts?: TArg<Opts & OutputOpts & AsyncRunOpts>
+      opts?: TArg<Opts & HashParallelOpts & AsyncRunOpts>
     ) => {
-      const rawOpts = opts as (Opts & OutputOpts & AsyncRunOpts) | undefined;
-      if (!rawOpts) return parallelSync(parts, {} as Opts & OutputOpts);
+      const rawOpts = opts as (Opts & HashParallelOpts & AsyncRunOpts) | undefined;
+      if (!rawOpts) return parallelSync(parts, {} as Opts & HashParallelOpts);
       return rawOpts.asyncTick !== undefined ||
         rawOpts.onProgress !== undefined ||
         rawOpts.nextTick !== undefined
@@ -867,6 +991,11 @@ export function mkHash<Mod extends HashMod, Opts>(
       return new StreamHash({ ...rawOpts, streamBufLen: blockLen, blocks, outputLen }) as TRet<
         HashStream<Opts>
       >;
+    };
+    cleanStateImpl = (state: TArg<HashState>) => {
+      const bytes = stateBytes(state);
+      clean(bytes);
+      prefixStates.delete(bytes);
     };
   }
   // Trampoline: init only on first usage
@@ -898,18 +1027,22 @@ export function mkHash<Mod extends HashMod, Opts>(
     lazyInit();
     return createImpl(opts);
   };
+  cleanStateImpl = (state) => {
+    lazyInit();
+    return cleanStateImpl(state);
+  };
   const hash = ((msg, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) =>
     hashImpl(msg, opts as TArg<MergeOpts<Opts, OutputOpts>>)) as TRet<HashInstance<Opts>>;
-  const chunksFn = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & OutputOpts>) =>
+  const chunksFn = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) =>
     chunksImpl(parts, opts);
   Object.assign(chunksFn, {
-    async: (parts: TArg<Uint8Array[]>, opts?: TArg<Opts & OutputOpts & AsyncRunOpts>) =>
+    async: (parts: TArg<Uint8Array[]>, opts?: TArg<Opts & HashBatchOpts & AsyncRunOpts>) =>
       chunksAsyncImpl(parts, opts),
   });
-  const parallel = (chunks: TArg<Uint8Array[]>, opts = {} as TArg<Opts & OutputOpts>) =>
+  const parallel = (chunks: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashParallelOpts>) =>
     parallelImpl(chunks, opts);
   Object.assign(parallel, {
-    async: (chunks: TArg<Uint8Array[]>, opts?: TArg<Opts & OutputOpts & AsyncRunOpts>) =>
+    async: (chunks: TArg<Uint8Array[]>, opts?: TArg<Opts & HashParallelOpts & AsyncRunOpts>) =>
       parallelAsyncImpl(chunks, opts),
   });
   Object.assign(hash, {
@@ -918,6 +1051,345 @@ export function mkHash<Mod extends HashMod, Opts>(
     chunks: chunksFn,
     parallel,
     create: (opts = {} as CreateOpts<Opts>) => createImpl(opts),
+    cleanState: (state: TArg<HashState>) => cleanStateImpl(state),
+    getPlatform: () => platform,
+    getDefinition: () => def,
+    canXOF: !!canXOF,
+    outputLen,
+    blockLen,
+    oid,
+  });
+  Object.defineProperty(hash, BRAND, { value: true, enumerable: false });
+  brandSet.add(hash);
+  return Object.freeze(hash) as TRet<HashInstance<Opts>>;
+}
+
+type NobleHashStream = {
+  blockLen: number;
+  outputLen: number;
+  canXOF?: boolean;
+  update(msg: TArg<Uint8Array>): NobleHashStream;
+  digest(): TRet<Uint8Array>;
+  digestInto(out: TArg<Uint8Array>): void;
+  destroy(): void;
+  xof?(bytes: number): TRet<Uint8Array>;
+  xofInto?(out: TArg<Uint8Array>): TRet<Uint8Array>;
+  _cloneInto(to?: NobleHashStream): NobleHashStream;
+};
+type NobleHashImpl<Opts> = {
+  hash: (msg: TArg<Uint8Array>, opts?: TArg<MergeOpts<Opts, OutputOpts>>) => TRet<Uint8Array>;
+  create?: (opts?: TArg<CreateOpts<Opts>>) => NobleHashStream;
+};
+
+export function mkHashNoble<Opts>(
+  def_: TArg<HashDef<any, Opts>>,
+  impl_: TArg<NobleHashImpl<Opts>>,
+  platform = 'noble'
+): TRet<HashInstance<Opts>> {
+  const def = def_ as HashDef<any, Opts>;
+  const impl = impl_ as NobleHashImpl<Opts>;
+  const { outputLen, blockLen, canXOF, oid } = def;
+  const rawOutputOpts = (opts?: any) => (isBytes(opts) ? {} : opts || {}) as HashBatchOpts;
+  const hasOutputOpts = (opts?: any) => {
+    const raw = rawOutputOpts(opts);
+    return raw.dkLen !== undefined || raw.out !== undefined || raw.outPos !== undefined;
+  };
+  const prefixStates = new WeakSet<NobleHashStream & object>();
+  const stateStream = (state: TArg<HashState>) => {
+    if ((typeof state !== 'object' && typeof state !== 'function') || state === null)
+      throw new Error('prefixState is not from this hash');
+    const stream = state as unknown as NobleHashStream & object;
+    if (!prefixStates.has(stream)) throw new Error('prefixState is not from this hash');
+    return stream;
+  };
+  const prefixState = (opts?: TArg<Opts & (HashBatchOpts | HashParallelOpts)>) => {
+    const raw = rawOutputOpts(opts);
+    if (raw.prefixState === undefined) return;
+    return stateStream(raw.prefixState);
+  };
+  const checkOutput = (opts?: any, bytes?: number, defaultLen = outputLen) => {
+    const raw = rawOutputOpts(opts);
+    if (raw.dkLen !== undefined) anumber(raw.dkLen, 'opts.dkLen');
+    if (raw.outPos !== undefined) anumber(raw.outPos, 'opts.outPos');
+    if (raw.out !== undefined) abytes(raw.out, undefined, 'output');
+    if (bytes !== undefined) anumber(bytes, 'xof.bytes');
+    const dkLen =
+      (bytes !== undefined ? bytes : raw.dkLen === undefined ? defaultLen : raw.dkLen) | 0;
+    if (!canXOF && dkLen > outputLen)
+      throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${dkLen}`);
+    const hasOut = raw.out !== undefined;
+    const out = raw.out || new Uint8Array(dkLen);
+    const outPos = (raw.outPos === undefined ? 0 : raw.outPos) | 0;
+    if (outPos < 0 || outPos + dkLen > out.length) throw new RangeError('out/outPos too small');
+    return { dkLen, out: out as TRet<Uint8Array>, outPos, hasOut };
+  };
+  const writeInto = (
+    inner: TArg<NobleHashStream>,
+    out: TArg<Uint8Array>,
+    dkLen: number,
+    tmp?: TArg<Uint8Array>
+  ): TRet<Uint8Array | undefined> => {
+    const rawInner = inner as NobleHashStream;
+    const rawOut = out as Uint8Array;
+    let rawTmp = tmp as Uint8Array | undefined;
+    if (canXOF) {
+      rawInner.xofInto!(rawOut.subarray(0, dkLen));
+      return rawTmp as TRet<Uint8Array | undefined>;
+    }
+    // noble BLAKE2 streams require aligned digestInto() views, but awasm outPos is byte-granular.
+    if (dkLen === outputLen && (rawOut.byteOffset & 3) === 0) rawInner.digestInto(rawOut);
+    else {
+      if (!rawTmp || rawTmp.length < outputLen) rawTmp = new Uint8Array(outputLen);
+      rawInner.digestInto(rawTmp);
+      if (dkLen) copyFast(rawOut, 0, rawTmp, 0, dkLen);
+    }
+    return rawTmp as TRet<Uint8Array | undefined>;
+  };
+  class Stream {
+    canXOF = !!canXOF;
+    blockLen = blockLen;
+    outputLen: number;
+    private inner: NobleHashStream;
+    constructor(inner: NobleHashStream, outputLen: number) {
+      this.inner = inner;
+      this.outputLen = outputLen;
+    }
+    update(msg: TArg<Uint8Array>) {
+      abytes(msg);
+      this.inner.update(msg);
+      return this;
+    }
+    digest(opts?: TArg<OutputOpts>): TRet<Uint8Array> {
+      if (!hasOutputOpts(opts) && !canXOF && this.outputLen === outputLen)
+        return this.inner.digest();
+      const checked = checkOutput(opts as TArg<Opts & OutputOpts>, undefined, this.outputLen);
+      const tmp = writeInto(
+        this.inner,
+        checked.out.subarray(checked.outPos, checked.outPos + checked.dkLen),
+        checked.dkLen
+      );
+      if (tmp) clean(tmp);
+      return checked.out;
+    }
+    destroy(): void {
+      this.inner.destroy();
+    }
+    xof(bytes: number, opts?: TArg<OutputOpts>): TRet<Uint8Array> {
+      if (!canXOF) throw new Error('XOF is not possible for this instance');
+      if (!hasOutputOpts(opts)) {
+        anumber(bytes, 'xof.bytes');
+        if (this.inner.xof) return this.inner.xof(bytes);
+        const out = new Uint8Array(bytes);
+        this.inner.xofInto!(out);
+        return out as TRet<Uint8Array>;
+      }
+      const checked = checkOutput(opts as TArg<Opts & OutputOpts>, bytes);
+      this.inner.xofInto!(checked.out.subarray(checked.outPos, checked.outPos + checked.dkLen));
+      return checked.out;
+    }
+    digestInto(buf: TArg<Uint8Array>): void {
+      abytes(buf, undefined, 'output');
+      if (buf.length < this.outputLen)
+        throw new RangeError(
+          'digestInto() expects output buffer of length at least ' + this.outputLen
+        );
+      const tmp = writeInto(this.inner, buf.subarray(0, this.outputLen), this.outputLen);
+      if (tmp) clean(tmp);
+    }
+    xofInto(buf: TArg<Uint8Array>): TRet<Uint8Array> {
+      abytes(buf, undefined, 'output');
+      if (!canXOF) throw new Error('XOF is not possible for this instance');
+      this.inner.xofInto!(buf);
+      return buf as TRet<Uint8Array>;
+    }
+    _cloneInto(to?: Stream): Stream {
+      if (to !== undefined && !(to instanceof Stream)) throw new Error('wrong instance');
+      const inner = this.inner._cloneInto(to?.inner);
+      if (to) {
+        to.inner = inner;
+        to.outputLen = this.outputLen;
+        return to;
+      }
+      return new Stream(inner, this.outputLen);
+    }
+    clone(): Stream {
+      return this._cloneInto();
+    }
+    exportState(): TRet<HashState> {
+      // Native noble streams may carry structured state, e.g. BLAKE3. The clone itself is the state.
+      const state = this.inner._cloneInto() as NobleHashStream & object;
+      prefixStates.add(state);
+      return state as unknown as TRet<HashState>;
+    }
+  }
+  const createSync = (opts = {} as TArg<CreateOpts<Opts>>) => {
+    if (!impl.create) throw new Error('streaming is not supported');
+    const inner = impl.create(opts);
+    const raw = rawOutputOpts(opts as TArg<Opts & OutputOpts>);
+    if (raw.dkLen !== undefined) anumber(raw.dkLen, 'opts.dkLen');
+    const fallback = inner.outputLen || outputLen;
+    const len = raw.dkLen === undefined ? fallback : raw.dkLen;
+    if (!canXOF && len > outputLen)
+      throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${len}`);
+    return new Stream(inner, len) as HashStream<Opts>;
+  };
+  const hashSync = (msg: TArg<Uint8Array>, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) => {
+    abytes(msg);
+    const raw = rawOutputOpts(opts);
+    if (
+      raw.out === undefined &&
+      raw.outPos === undefined &&
+      (raw.dkLen === undefined || (canXOF && raw.dkLen !== undefined))
+    )
+      return impl.hash(msg, opts);
+    const checked = checkOutput(opts as TArg<Opts & OutputOpts>);
+    const res = impl.hash(msg, opts);
+    const { dkLen, out, outPos, hasOut } = checked;
+    if (res.length < dkLen) throw new RangeError('output is too small');
+    if (!hasOut && res.length === dkLen) return res as TRet<Uint8Array>;
+    if (dkLen) copyFast(out, outPos, res, 0, dkLen);
+    if (out !== res) clean(res);
+    return out;
+  };
+  const chunksSync = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) => {
+    if (!Array.isArray(parts)) throw new Error('expected array of messages');
+    let total = 0;
+    for (const p of parts) {
+      abytes(p);
+      total += p.length;
+    }
+    const prefix = prefixState(opts);
+    if (prefix && total === 0) throw new Error('prefixState requires a non-empty message');
+    if (prefix) {
+      const h = new Stream(prefix._cloneInto(), outputLen);
+      for (const p of parts) h.update(p);
+      return h.digest(rawOutputOpts(opts));
+    }
+    if (impl.create) {
+      const h = createSync(opts as TArg<CreateOpts<Opts>>);
+      for (const p of parts) h.update(p);
+      return h.digest(rawOutputOpts(opts));
+    }
+    const joined = concatBytes(...parts);
+    try {
+      return hashSync(joined, opts as TArg<MergeOpts<Opts, OutputOpts>>);
+    } finally {
+      clean(joined);
+    }
+  };
+  const parallelSync = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashParallelOpts>) => {
+    if (!Array.isArray(parts)) throw new Error('expected array of messages');
+    for (const p of parts) abytes(p);
+    const prefix = prefixState(opts);
+    if (prefix && parts.length === 0) throw new Error('prefixState requires a non-empty message');
+    if (prefix)
+      for (const p of parts)
+        if (p.length === 0) throw new Error('prefixState requires a non-empty message');
+    const checked = checkParallelOutput(opts, parts.length, outputLen, canXOF);
+    let tmp: Uint8Array | undefined;
+    const base = prefix || (impl.create ? impl.create(opts as TArg<CreateOpts<Opts>>) : undefined);
+    let work: NobleHashStream | undefined;
+    for (let i = 0; i < parts.length; i++) {
+      const lane = checked.out[i];
+      if (base) {
+        work = base._cloneInto(work);
+        work.update(parts[i]);
+        tmp = writeInto(work, lane, checked.dkLen, tmp);
+      } else {
+        const outOpts = (
+          isBytes(opts)
+            ? { key: opts, out: lane, outPos: 0, dkLen: checked.dkLen }
+            : { ...((opts || {}) as object), out: lane, outPos: 0, dkLen: checked.dkLen }
+        ) as TArg<MergeOpts<Opts, OutputOpts>>;
+        hashSync(parts[i], outOpts);
+      }
+    }
+    if (tmp) clean(tmp);
+    if (work) work.destroy();
+    if (base && base !== prefix) base.destroy();
+    return checked.out;
+  };
+  const setupTick = (
+    setup: TArg<AsyncSetup & { isAsync?: boolean }>,
+    total: number,
+    opts?: TArg<AsyncRunOpts>
+  ) => {
+    const rawSetup = setup as AsyncSetup & { isAsync?: boolean };
+    const rawOpts = opts as AsyncRunOpts | undefined;
+    return !rawSetup.isAsync
+      ? !rawOpts?.onProgress
+        ? (rawSetup({ total: 0 }), (_inc?: number) => false)
+        : rawSetup({ total, onProgress: rawOpts.onProgress })
+      : rawSetup({
+          total,
+          asyncTick: rawOpts?.asyncTick,
+          onProgress: rawOpts?.onProgress,
+          nextTick: rawOpts?.nextTick,
+        });
+  };
+  const hash = ((msg: TArg<Uint8Array>, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) =>
+    hashSync(msg, opts as any)) as TRet<HashInstance<Opts>>;
+  const chunks = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) =>
+    chunksSync(parts, opts);
+  Object.assign(chunks, {
+    async: mkAsync(function* (
+      setup: TArg<AsyncSetup>,
+      parts: TArg<Uint8Array[]>,
+      opts = {} as TArg<Opts & HashBatchOpts & AsyncRunOpts>
+    ) {
+      const setupMode = setup as AsyncSetup & { isAsync?: boolean };
+      const rawOpts = opts as any;
+      if (!setupMode.isAsync && !rawOpts?.onProgress) return chunksSync(parts, rawOpts);
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const tick = setupTick(setupMode, total, rawOpts);
+      const out = chunksSync(parts, rawOpts);
+      if ((setupMode.isAsync || !!rawOpts?.onProgress) && tick(total)) yield;
+      return out;
+    }).async,
+  });
+  const parallel = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashParallelOpts>) =>
+    parallelSync(parts, opts);
+  Object.assign(parallel, {
+    async: mkAsync(function* (
+      setup: TArg<AsyncSetup>,
+      parts: TArg<Uint8Array[]>,
+      opts = {} as TArg<Opts & HashParallelOpts & AsyncRunOpts>
+    ) {
+      const setupMode = setup as AsyncSetup & { isAsync?: boolean };
+      const rawOpts = opts as any;
+      if (!setupMode.isAsync && !rawOpts?.onProgress) return parallelSync(parts, rawOpts);
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const tick = setupTick(setupMode, total, rawOpts);
+      const out = parallelSync(parts, rawOpts);
+      if ((setupMode.isAsync || !!rawOpts?.onProgress) && tick(total)) yield;
+      return out;
+    }).async,
+  });
+  Object.assign(hash, {
+    async: mkAsync(function* (
+      setup: TArg<AsyncSetup>,
+      msg: TArg<Uint8Array>,
+      opts = {} as TArg<MergeOpts<Opts, OutputOpts> & AsyncRunOpts>
+    ) {
+      const setupMode = setup as AsyncSetup & { isAsync?: boolean };
+      // TArg expands byte-like option unions here; keep the cast local to the async shim.
+      const rawOpts = opts as any;
+      if (!setupMode.isAsync && !rawOpts?.onProgress) return hashSync(msg, rawOpts);
+      const tick = setupTick(setupMode, msg.length, rawOpts);
+      const out = hashSync(msg, rawOpts);
+      if ((setupMode.isAsync || !!rawOpts?.onProgress) && tick(msg.length)) yield;
+      return out;
+    }).async,
+    chunks,
+    parallel,
+    create: (opts = {} as CreateOpts<Opts>) => createSync(opts),
+    cleanState(state: TArg<HashState>) {
+      const stream = stateStream(state);
+      stream.destroy();
+      prefixStates.delete(stream);
+    },
     getPlatform: () => platform,
     getDefinition: () => def,
     canXOF: !!canXOF,
@@ -934,11 +1406,11 @@ type AsyncHashImpl<Opts> = {
   hash: (msg: TArg<Uint8Array>, opts?: MergeOpts<Opts, OutputOpts>) => Promise<TRet<Uint8Array>>;
   chunks?: (
     parts: TArg<Uint8Array[]>,
-    opts?: MergeOpts<Opts, OutputOpts>
+    opts?: MergeOpts<Opts, HashBatchOpts>
   ) => Promise<TRet<Uint8Array>>;
   parallel?: (
     parts: TArg<Uint8Array[]>,
-    opts?: MergeOpts<Opts, OutputOpts>
+    opts?: MergeOpts<Opts, HashParallelOpts>
   ) => Promise<TRet<Uint8Array[]>>;
 };
 
@@ -964,12 +1436,25 @@ const copyOutput = (
     clean(out);
     return res as TRet<Uint8Array>;
   }
-  const outPos = opts.outPos || 0;
+  const outPos = opts?.outPos || 0;
   anumber(outPos, 'outPos');
   if (opts.out.length < outPos + dkLen) throw new RangeError('output is too small');
   opts.out.set(msg, outPos);
   clean(out);
   return opts.out as TRet<Uint8Array>;
+};
+const copyParallelOutput = (
+  outs: TArg<Uint8Array[]>,
+  views: TArg<Uint8Array[]>,
+  dkLen: number,
+  outputLen: number,
+  canXOF?: boolean
+): TRet<Uint8Array[]> => {
+  if (views.length !== outs.length)
+    throw new RangeError('output array length must match messages length');
+  for (let i = 0; i < outs.length; i++)
+    copyOutput(outs[i], { out: views[i], dkLen }, outputLen, canXOF);
+  return views as TRet<Uint8Array[]>;
 };
 
 const hashSyncError = () => {
@@ -994,7 +1479,8 @@ export function mkHashAsync<Opts>(
   };
   const chunks = ((_parts: TArg<Uint8Array[]>) =>
     hashSyncError()) as unknown as HashInstance<Opts>['chunks'];
-  const chunksAsync = async (parts: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
+  const chunksAsync = async (parts: TArg<Uint8Array[]>, opts = {} as Opts & HashBatchOpts) => {
+    if (opts.prefixState !== undefined) throw new Error('prefixState is not supported');
     for (let i = 0; i < parts.length; i++) abytes(parts[i]);
     if (impl.chunks) {
       const out = await impl.chunks(parts, opts);
@@ -1011,13 +1497,15 @@ export function mkHashAsync<Opts>(
   Object.assign(chunks, { async: chunksAsync });
   const parallel = ((_parts: TArg<Uint8Array[]>) =>
     hashSyncError()) as unknown as HashInstance<Opts>['parallel'];
-  const parallelAsync = async (parts: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
-    if (opts.out || opts.outPos) throw new Error('parallel output opts are not supported');
+  const parallelAsync = async (parts: TArg<Uint8Array[]>, opts = {} as Opts & HashParallelOpts) => {
+    if (opts.prefixState !== undefined) throw new Error('prefixState is not supported');
     for (let i = 0; i < parts.length; i++) abytes(parts[i]);
+    const checked = checkParallelOutput(opts, parts.length, outputLen, canXOF);
+    const runOpts = { ...opts, out: undefined, outPos: undefined } as any;
     const out = impl.parallel
-      ? await impl.parallel(parts, opts)
-      : await Promise.all(parts.map((i) => impl.hash(i, opts)));
-    return out.map((i) => copyOutput(i, opts, outputLen, canXOF));
+      ? await impl.parallel(parts, runOpts)
+      : await Promise.all(parts.map((i) => impl.hash(i, runOpts)));
+    return copyParallelOutput(out, checked.out, checked.dkLen, outputLen, canXOF);
   };
   Object.assign(parallel, { async: parallelAsync });
   Object.assign(hash, {
@@ -1026,6 +1514,9 @@ export function mkHashAsync<Opts>(
     parallel,
     create: () => {
       throw new Error('streaming is not supported');
+    },
+    cleanState: () => {
+      throw new Error('prefixState is not supported');
     },
     getPlatform: () => platform,
     getDefinition: () => def,
@@ -1060,7 +1551,16 @@ Are mitigated by:
 
 Multiple installations are allowed, the last one wins.
 */
-type Stub<Opts> = { install: (impl: HashInstance<Opts>) => void };
+type InstallOpts = { onlyMissing?: boolean };
+/** Installable hash stub used by the `stub` platform. */
+export type Stub<Opts> = {
+  /**
+   * Install a branded hash implementation into this stub.
+   * @param impl - Hash implementation created by an awasm hash constructor.
+   * @param opts - {@link InstallOpts}; `onlyMissing` leaves an existing implementation unchanged.
+   */
+  install: (impl: HashInstance<Opts>, opts?: InstallOpts) => void;
+};
 export function mkHashStub<Mod extends HashMod, Opts>(
   def_: TArg<HashDef<Mod, Opts>>
 ): TRet<HashInstance<Opts> & Stub<Opts>> {
@@ -1077,22 +1577,22 @@ export function mkHashStub<Mod extends HashMod, Opts>(
     return inner(msg, opts);
   }) as HashInstance<Opts> & Stub<Opts>;
 
-  const chunks = (parts: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
+  const chunks = (parts: TArg<Uint8Array[]>, opts = {} as Opts & HashBatchOpts) => {
     checkInner(inner);
     return inner.chunks(parts, opts);
   };
   Object.assign(chunks, {
-    async: async (parts: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
+    async: async (parts: TArg<Uint8Array[]>, opts = {} as Opts & HashBatchOpts) => {
       checkInner(inner);
       return inner.chunks.async(parts, opts);
     },
   });
-  const parallel = (chunks: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) => {
+  const parallel = (chunks: TArg<Uint8Array[]>, opts = {} as Opts & HashParallelOpts) => {
     checkInner(inner);
     return inner.parallel(chunks, opts);
   };
   Object.assign(parallel, {
-    async(chunks: TArg<Uint8Array[]>, opts = {} as Opts & OutputOpts) {
+    async(chunks: TArg<Uint8Array[]>, opts = {} as Opts & HashParallelOpts) {
       checkInner(inner);
       return inner.parallel.async(chunks, opts);
     },
@@ -1109,6 +1609,10 @@ export function mkHashStub<Mod extends HashMod, Opts>(
       checkInner(inner);
       return inner.create(opts);
     },
+    cleanState(state: TArg<HashState>) {
+      checkInner(inner);
+      return inner.cleanState(state);
+    },
     getPlatform: () => {
       checkInner(inner);
       return inner.getPlatform();
@@ -1117,7 +1621,10 @@ export function mkHashStub<Mod extends HashMod, Opts>(
       checkInner(inner);
       return inner.getDefinition();
     },
-    install: (impl: TArg<HashInstance<Opts>>) => {
+    install: (impl: TArg<HashInstance<Opts>>, opts = {} as TArg<InstallOpts>) => {
+      const { onlyMissing } = opts as InstallOpts;
+      if (onlyMissing !== undefined) abool(onlyMissing);
+      if (onlyMissing && inner !== undefined) return;
       // install() accepts only constructor-created hashes: WeakSet branding rejects copied fields,
       // and exact definition identity rejects same-shaped but different hash families.
       if (!isBranded(impl)) throw new Error('install: non-branded implementation');

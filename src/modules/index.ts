@@ -123,7 +123,7 @@ export const sha256 = {
     rounds: 64,
     shifts: [7, 18, 3, 17, 19, 10, 6, 11, 25, 2, 13, 22],
   },
-  compilerOpts: { threadLimit: 2 },
+  compilerOpts: {},
 } satisfies ModuleSpec<'genSha2'>;
 export const sha512 = {
   fn: 'genSha2',

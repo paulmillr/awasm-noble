@@ -7,6 +7,7 @@ import type { HashInstance } from './hashes-abstract.ts';
 import { hmac } from './hmac.ts';
 import type { ARGON2, SCRYPT } from './targets/types.ts';
 import {
+  abool,
   abytes,
   anumber,
   checkOpts,
@@ -46,6 +47,16 @@ export type KDF<Opts extends KDFOpts> = ((
   getPlatform: () => string | undefined;
   getDefinition: () => TRet<any>;
 };
+type KDFRun<Opts extends KDFOpts> = (
+  password: TArg<KDFInput>,
+  salt: TArg<KDFInput>,
+  opts: TArg<Opts>
+) => TRet<Uint8Array>;
+type KDFRunAsync<Opts extends KDFOpts> = (
+  password: TArg<KDFInput>,
+  salt: TArg<KDFInput>,
+  opts: TArg<Opts>
+) => Promise<TRet<Uint8Array>>;
 
 /**
  * Helper for KDFs: consumes uint8array or string.
@@ -108,7 +119,42 @@ function mkKDF<O extends KDFOpts>(
   return Object.freeze(res) as KDF<O>;
 }
 
-type Stub<Opts extends KDFOpts> = { install: (impl: KDF<Opts>) => void };
+/**
+ * Wrap a noble-hashes KDF as an awasm KDF implementation.
+ * @param definition - definition object exposed through `getDefinition()`.
+ * @param run - synchronous noble KDF function.
+ * @param runAsync - asynchronous noble KDF function.
+ * @param platform - backend platform label.
+ * @returns Installed noble-backed KDF surface.
+ */
+export function mkKDFNoble<O extends KDFOpts>(
+  definition: TArg<any>,
+  run: TArg<KDFRun<O>>,
+  runAsync: TArg<KDFRunAsync<O>>,
+  platform = 'noble'
+): TRet<KDF<O>> {
+  const checkNobleOpts = (opts: TArg<O>) => {
+    if ((opts as KDFOpts).nextTick !== undefined) throw new Error('"nextTick" is not supported');
+    return opts;
+  };
+  const runSync = run as KDFRun<O>;
+  const runAsyncFn = runAsync as KDFRunAsync<O>;
+  const kdf = ((password: TArg<KDFInput>, salt: TArg<KDFInput>, opts = {} as O) => {
+    return runSync(password, salt, checkNobleOpts(opts));
+  }) as KDF<O>;
+  Object.assign(kdf, {
+    async: async (password: TArg<KDFInput>, salt: TArg<KDFInput>, opts = {} as O) =>
+      runAsyncFn(password, salt, checkNobleOpts(opts)),
+    getPlatform: () => platform,
+    getDefinition: () => definition,
+  });
+  Object.defineProperty(kdf, BRAND, { value: true, enumerable: false });
+  brandSet.add(kdf);
+  return Object.freeze(kdf) as TRet<KDF<O>>;
+}
+
+type InstallOpts = { onlyMissing?: boolean };
+type Stub<Opts extends KDFOpts> = { install: (impl: KDF<Opts>, opts?: InstallOpts) => void };
 /**
  * Create an installable KDF stub for targets that attach the real implementation later.
  * @param _def_ - definition factory that installed implementations must report via
@@ -140,7 +186,10 @@ export function mkKDFStub<Opts extends KDFOpts>(
       checkInner(inner);
       return inner.getDefinition();
     },
-    install: (impl: TArg<KDF<Opts>>) => {
+    install: (impl: TArg<KDF<Opts>>, opts = {} as TArg<InstallOpts>) => {
+      const { onlyMissing } = opts as InstallOpts;
+      if (onlyMissing !== undefined) abool(onlyMissing);
+      if (onlyMissing && inner !== undefined) return;
       if (!isBranded(impl)) throw new Error('install: non-branded implementation');
       // NOTE: this strict check works because all implementations use the same
       // exported KDF factory function, so a same-shaped different KDF family

@@ -2,7 +2,7 @@
  * Utilities: assertions, conversions.
  * @module
  */
-import type { HashInstance } from './hashes-abstract.ts';
+import type { HashInstance, HashState } from './hashes-abstract.ts';
 
 /**
  * Bytes API type helpers for old + new TypeScript.
@@ -279,6 +279,8 @@ export function ahash<Opts>(h: TArg<HashInstance<Opts>>): void {
 export type CHash<_T = any, Opts = undefined> = HashInstance<Opts>;
 /** Compatibility alias matching noble-hashes `CHashXOF<Instance, Opts>` consumers. */
 export type CHashXOF<_T = any, Opts = undefined> = HashInstance<Opts>;
+/** Opaque state returned by `hash.create().exportState()`. */
+export type { HashState };
 
 /** Generic type encompassing 8/16/32-byte arrays - but not 64-byte. */
 // prettier-ignore

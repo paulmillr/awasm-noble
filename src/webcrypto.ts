@@ -13,8 +13,10 @@ import {
   mkHashAsync,
   type HashDef,
   type HashInstance,
+  type HashState,
   type HashStream,
   type OutputOpts,
+  type HashBatchOpts,
 } from './hashes-abstract.ts';
 import {
   sha1 as def_sha1,
@@ -39,7 +41,16 @@ import {
   type TArg,
   type TRet,
 } from './utils.ts';
-export type { OutputOpts, HashStream, HashDef, Asyncify, Cipher, CipherDef };
+export type {
+  OutputOpts,
+  HashBatchOpts,
+  HashState,
+  HashStream,
+  HashDef,
+  Asyncify,
+  Cipher,
+  CipherDef,
+};
 
 type WebHash<Opts = any> = TRet<HashInstance<Opts>> & {
   isSupported: () => Promise<boolean>;

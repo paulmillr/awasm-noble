@@ -1,5 +1,6 @@
 export * from '@awasm/noble';
 export * as js from '@awasm/noble/js.js';
+export * as noble from '@awasm/noble/noble.js';
 export * as wasm_threads from '@awasm/noble/wasm_threads.js';
 export * as runtime from '@awasm/noble/runtime.js';
 export * as stub from '@awasm/noble/stub.js';

@@ -58,7 +58,8 @@ blake3(new Uint8Array([0xca, 0xfe]));
 
 * [Usage](#usage)
   + [Interface](#interface)
-  + [Backends: wasm, wasm_threads, js, webcrypto, runtime](#backends-wasm-wasm_threads-js-webcrypto-runtime)
+  + [Backends: wasm, wasm_threads, js, noble, webcrypto, runtime](#backends-wasm-wasm_threads-js-noble-webcrypto-runtime)
+  + [Noble platform](#noble-platform)
   + [Stubs](#stubs)
   + [Threads](#threads)
   + [Streaming](#streaming)
@@ -134,16 +135,17 @@ MACs (`poly1305` / `ghash` / `polyval` / `cmac`) are hash-like, with extra `key`
 
 KDFs are `kdf(password, salt, opts?)` and `kdf.async(...)`.
 
-### Backends: wasm, wasm_threads, js, webcrypto, runtime
+### Backends: wasm, wasm_threads, js, noble, webcrypto, runtime
 
 ```ts
 import { sha256 } from '@awasm/noble'; // wasm
 import { sha256 as sha256wasm_threads } from '@awasm/noble/wasm_threads.js';
 import { sha256 as sha256js } from '@awasm/noble/js.js';
+import { sha256 as sha256noble } from '@awasm/noble/noble.js';
 import { sha256 as sha256wc } from '@awasm/noble/webcrypto.js';
 import { sha256 as sha256rn } from '@awasm/noble/runtime.js';
 
-for (const hash of [sha256, sha256wasm_threads, sha256js, sha256rn]) {
+for (const hash of [sha256, sha256wasm_threads, sha256js, sha256noble, sha256rn]) {
   console.log(hash(new Uint8Array([1, 2, 3])));
 }
 for (const hash of [sha256wc]) {
@@ -160,8 +162,66 @@ for (const hash of [sha256wc]) {
 3. **js:** JS files without WASM. Extra optimizations (like loop unrolling) are auto-applied, to make everything fast.
 4. **runtime:** slowly executes source code in-place. Tiny bundle size, useful for debugging. Depends on `@awasm/compiler`
 
-Additionally, **webcrypto** submodule wraps around built-in `WebCrypto` methods. It's async-only.
+Additionally, **noble** wraps `@noble/hashes` and `@noble/ciphers`, and **webcrypto** wraps built-in `WebCrypto` methods. WebCrypto is async-only.
 
+### Noble platform
+
+The `@awasm/noble/noble.js` platform is a static wrapper around `@noble/hashes`
+and `@noble/ciphers`. Those libraries are battle-tested and independently
+audited. The wrapper gives them the same awasm API as the compiled backends,
+including `.chunks(...)`, `.parallel(...)`, `out`, `outPos`, and stubs.
+
+`@awasm/noble` keeps `@noble/hashes` and `@noble/ciphers` as optional peer
+dependencies, so installing `@awasm/noble` alone does not pull them in. Install
+them only when you import the noble platform:
+
+```sh
+npm install @awasm/noble @noble/hashes @noble/ciphers
+```
+
+```ts
+import { sha256 } from '@awasm/noble/noble.js';
+
+const msgs = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
+console.log(sha256.parallel(msgs));
+```
+
+This is useful for libraries that want awasm's API without forcing WASM on
+users. A library can export stubs, install noble as the default, and still allow
+applications to switch to faster wasm/js/wasm_threads platforms when
+performance matters.
+
+```json
+{
+  "dependencies": {
+    "@awasm/noble": "^0.1.2"
+  },
+  "peerDependencies": {
+    "@noble/ciphers": "~2.2.0",
+    "@noble/hashes": "~2.2.0"
+  }
+}
+```
+
+```ts
+// inside a library
+import { sha256, chacha20poly1305 } from '@awasm/noble/stub.js';
+import { sha256 as nobleSha256, chacha20poly1305 as nobleChaCha } from '@awasm/noble/noble.js';
+
+sha256.install(nobleSha256, { onlyMissing: true });
+chacha20poly1305.install(nobleChaCha, { onlyMissing: true });
+
+export { sha256, chacha20poly1305 };
+```
+
+```ts
+// inside an application that wants a faster backend
+import { sha256 } from 'my-library';
+import { sha256 as wasmSha256 } from '@awasm/noble/wasm_threads.js';
+
+sha256.install(wasmSha256);
+console.log(sha256.parallel([new Uint8Array([1, 2, 3])]));
+```
 
 ### Stubs
 
@@ -197,6 +257,10 @@ if (await sha256Web.isSupported()) {
   console.log(await sha256.async(new Uint8Array([1, 2, 3]))); // generic
 }
 ```
+
+`install(impl, { onlyMissing: true })` installs only when the stub is empty.
+This is intended for libraries that install a default backend, while preserving
+an implementation already chosen by the app.
 
 ### Threads
 

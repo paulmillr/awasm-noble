@@ -1,5 +1,6 @@
 import './ciphers/index.ts';
 import './hashes/index.ts';
+import './noble.test.ts';
 import { startTests } from './platforms.ts';
 import './runtime-fast.test.ts';
 import './utils.test.ts';

@@ -3,13 +3,17 @@ import { deepStrictEqual as eql, rejects, strictEqual, throws } from 'node:asser
 import { PLATFORMS } from '../platforms.ts';
 import * as webcrypto from '../../src/webcrypto.ts';
 import * as wasm from '../../src/targets/wasm/index.ts';
-import { mkHash } from '../../src/hashes-abstract.ts';
+import { mkHash, type HashState } from '../../src/hashes-abstract.ts';
 import { pbkdf2 } from '../../src/kdf.ts';
+import { concatBytes } from '../../src/utils.ts';
 
 const msg = Uint8Array.from({ length: 1024 * 1024 }, (_, i) => (i * 13) & 0xff);
 const parts = [msg.subarray(0, 300_000), msg.subarray(300_000, 700_000), msg.subarray(700_000)];
 const batch = Array.from({ length: 4 }, (_, i) =>
   Uint8Array.from({ length: 256 * 1024 }, (_, j) => (j + i * 17) & 0xff)
+);
+const smallBatch = Array.from({ length: 3 }, (_, i) =>
+  Uint8Array.from({ length: 41 }, (_, j) => (j * 9 + i * 23) & 0xff)
 );
 
 for (const name in PLATFORMS) {
@@ -114,6 +118,22 @@ for (const name in PLATFORMS) {
       eql(asyncOut, sync);
       eql(ticks > 0, true);
     });
+    should('parallel accepts exported prefixState', async () => {
+      const prefix = Uint8Array.from({ length: p.sha256.blockLen }, (_, i) => (i * 5 + 7) & 255);
+      const state = p.sha256.create().update(prefix).exportState();
+      const exp = smallBatch.map((i) => p.sha256(concatBytes(prefix, i)));
+      eql(p.sha256.parallel(smallBatch, { prefixState: state }), exp);
+      eql(await p.sha256.parallel.async(smallBatch, { asyncTick: 0, prefixState: state }), exp);
+      p.sha256.cleanState(state);
+
+      const xofPrefix = Uint8Array.from({ length: 19 }, (_, i) => (i * 3 + 1) & 255);
+      const xofState = p.shake256.create().update(xofPrefix).exportState();
+      eql(
+        p.shake256.parallel(smallBatch, { dkLen: 24, prefixState: xofState }),
+        smallBatch.map((i) => p.shake256(concatBytes(xofPrefix, i), { dkLen: 24 }))
+      );
+      p.shake256.cleanState(xofState);
+    });
     should('sha256 parallel honors out/outPos for every lane', async () => {
       const syncExp = p.sha256.parallel(batch);
       const outSync = new Uint8Array(1 + batch.length * syncExp[0].length);
@@ -197,6 +217,14 @@ describe('hash async (webcrypto)', () => {
     eql(
       await webcrypto.sha256.parallel.async(batch, { dkLen: 3 }),
       wasm.sha256.parallel(batch).map((i) => i.subarray(0, 3))
+    );
+  });
+
+  should('parallel rejects prefixState', async () => {
+    await rejects(() =>
+      webcrypto.sha256.parallel.async(smallBatch, {
+        prefixState: new Uint8Array(1) as unknown as HashState,
+      })
     );
   });
 });

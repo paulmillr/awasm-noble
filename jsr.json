@@ -4,6 +4,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./js.js": "./src/js.ts",
+    "./noble.js": "./src/noble.ts",
     "./wasm.js": "./src/wasm.ts",
     "./wasm_threads.js": "./src/wasm_threads.ts",
     "./runtime.js": "./src/runtime.ts",
@@ -16,6 +17,9 @@
     "./webcrypto.js": "./src/webcrypto.ts"
   },
   "imports": {
+    "@awasm/compiler": "jsr:@awasm/compiler@0.1.2",
+    "@noble/ciphers": "jsr:@noble/ciphers@~2.2.0",
+    "@noble/hashes": "jsr:@noble/hashes@~2.2.0"
   },
   "publish": {
     "include": ["src", "jsr.json", "LICENSE", "README.md"],
