@@ -648,7 +648,7 @@ Online benchmark (BLAKE3 checksum calculator) is available on [the demo website 
 
 ```
 # hashes, input: 32x1mb, +threads
-sha256 x 1,600 mb/sec
+sha256 x 6,687 mb/sec
 sha512 x 6,272 mb/sec
 sha3_256 x 6,976 mb/sec
 sha3_512 x 4,224 mb/sec
@@ -673,7 +673,6 @@ aes-ctr-256 x 2,105 mb/sec
 ### wasm (no threads)
 
 ```
-# hashes, input: 1mb
 sha256 x 553 mb/sec
 sha512 x 834 mb/sec
 sha3_256 x 899 mb/sec
@@ -684,7 +683,6 @@ blake3 x 1,940 mb/sec
 ripemd160 x 503 mb/sec
 md5 x 857 mb/sec
 sha1 x 1,294 mb/sec
-# ciphers, input: 10mb
 chacha20poly1305 x 1,196 mb/sec
 aes-gcm-256 x 234 mb/sec
 aes-gcm-siv-256 x 236 mb/sec
@@ -692,7 +690,6 @@ chacha20 x 1,672 mb/sec
 aes-ecb-256 x 277 mb/sec
 aes-cbc-256 x 262 mb/sec
 aes-ctr-256 x 272 mb/sec
-
 # KDF
 pbkdf2(sha256, c: 2 ** 18) x 2 ops/sec @ 351ms/op
 pbkdf2(sha512, c: 2 ** 18) x 1 ops/sec @ 503ms/op
