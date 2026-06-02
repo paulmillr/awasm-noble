@@ -5,7 +5,7 @@ on:
 jobs:
   release-js:
     name: jsbt v0.5.1
-    uses: paulmillr/jsbt/.github/workflows/release.yml@d156c5951d47d615d673d039aa03de6b9669449f
+    uses: paulmillr/jsbt/.github/workflows/release.yml@3a48ddca408c90c7d5d3911981a173ad196cf9bc
     permissions:
       contents: read
       id-token: write
