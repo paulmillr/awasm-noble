@@ -1,6 +1,6 @@
 {
   "name": "@awasm/noble",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Auditable WASM implementation of cryptographic hashes & ciphers",
   "files": [
     "src",
