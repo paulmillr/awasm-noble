@@ -134,8 +134,10 @@ export function mkKDFNoble<O extends KDFOpts>(
   platform = 'noble'
 ): TRet<KDF<O>> {
   const checkNobleOpts = (opts: TArg<O>) => {
-    if ((opts as KDFOpts).nextTick !== undefined) throw new Error('"nextTick" is not supported');
-    return opts;
+    // checkOpts rejects non-object options before we treat them as KDF option fields.
+    const checked = checkOpts({}, opts as O) as O & KDFOpts;
+    if (checked.nextTick !== undefined) throw new Error('"nextTick" is not supported');
+    return checked as O;
   };
   const runSync = run as KDFRun<O>;
   const runAsyncFn = runAsync as KDFRunAsync<O>;

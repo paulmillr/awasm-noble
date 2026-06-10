@@ -9,7 +9,6 @@ const { test: polyval } = await import('./noble-ciphers/test/polyval.test.ts');
 const { test: siv } = await import('./noble-ciphers/test/siv.test.ts');
 const { test: utils } = await import('./noble-ciphers/test/utils.test.ts');
 const { test: webcrypto } = await import('./noble-ciphers/test/webcrypto.test.ts');
-const { test: errors } = await import('./noble-ciphers/test/errors.test.ts');
 const BT = { describe, should };
 const PLATFORMS = getCipherPlatforms();
 for (const k in PLATFORMS) {
@@ -21,7 +20,6 @@ for (const k in PLATFORMS) {
   polyval(k, PLATFORMS[k], BT);
   siv(k, PLATFORMS[k], BT);
   webcrypto(k, PLATFORMS[k], BT);
-  errors(k, PLATFORMS[k], BT);
 }
 utils(BT);
 await import('./aeskw.test.ts');

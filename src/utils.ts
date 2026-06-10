@@ -3,6 +3,15 @@
  * @module
  */
 import type { HashInstance, HashState } from './hashes-abstract.ts';
+export function validateObject(
+  obj: Record<string, any>,
+  _fields: any,
+  _optFields: any,
+  kind: string
+) {
+  if (!(typeof obj === 'object' && obj !== null))
+    throw new Error(`expected ${kind} to be an object`);
+}
 
 /**
  * Bytes API type helpers for old + new TypeScript.
@@ -225,6 +234,7 @@ export function abytes(
  * ```
  */
 export function aexists(instance: any, checkFinished = true): void {
+  validateObject(instance, {}, {}, 'instance');
   if (instance.destroyed) throw new Error('Hash instance has been destroyed');
   if (checkFinished && instance.finished) throw new Error('Hash#digest() has already been called');
 }
@@ -243,7 +253,9 @@ export function aexists(instance: any, checkFinished = true): void {
  */
 export function aoutput(out: any, instance: any): void {
   abytes(out, undefined, 'output');
+  validateObject(instance, {}, {}, 'instance');
   const min = instance.outputLen;
+  anumber(min, 'instance.outputLen');
   if (out.length < min) {
     // Shared digestInto() contracts treat undersized destinations as a range problem, not a
     // generic runtime failure, so callers can distinguish "wrong type" from "too short".
@@ -822,8 +834,12 @@ export function checkOpts<T1 extends EmptyObj, T2 extends EmptyObj>(
   defaults: T1,
   opts?: T2
 ): T1 & T2 {
-  if (opts !== undefined && {}.toString.call(opts) !== '[object Object]')
-    throw new TypeError('options must be object or undefined');
+  validateObject(defaults as Record<string, any>, {}, {}, 'defaults');
+  if (opts !== undefined) {
+    if (isBytes(opts)) throw new TypeError('"opts" expected object, got Uint8Array');
+    if (opts instanceof Date) throw new TypeError('"opts" expected object, got Date');
+    validateObject(opts as Record<string, any>, {}, {}, 'opts');
+  }
   const merged = Object.assign(defaults, opts);
   return merged as T1 & T2;
 }
@@ -1186,9 +1202,13 @@ export function managedNonce<T extends CipherWithNonce>(
   fn: T,
   randomBytes_: typeof randomBytes = randomBytes
 ): TRet<RemoveNonce<T>> {
+  if (typeof fn !== 'function')
+    throw new TypeError('"fn" expected cipher constructor, got type=' + typeof fn);
+  if (typeof randomBytes_ !== 'function')
+    throw new TypeError('"randomBytes_" expected function, got type=' + typeof randomBytes_);
   const { nonceLength } = fn;
   const nonceLen = nonceLength as number;
-  anumber(nonceLen);
+  anumber(nonceLen, 'fn.nonceLength');
   const addNonce = (
     nonce: TArg<Uint8Array>,
     ciphertext: TArg<Uint8Array>,

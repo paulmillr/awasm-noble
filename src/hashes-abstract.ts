@@ -12,6 +12,7 @@ import {
   copyFast,
   isBytes,
   mkAsync,
+  validateObject,
   type AsyncRunOpts,
   type AsyncSetup,
   type Asyncify,
@@ -1089,7 +1090,11 @@ export function mkHashNoble<Opts>(
   const def = def_ as HashDef<any, Opts>;
   const impl = impl_ as NobleHashImpl<Opts>;
   const { outputLen, blockLen, canXOF, oid } = def;
-  const rawOutputOpts = (opts?: any) => (isBytes(opts) ? {} : opts || {}) as HashBatchOpts;
+  const rawOutputOpts = (opts?: any) => {
+    if (opts === undefined || isBytes(opts)) return {} as HashBatchOpts;
+    validateObject(opts, {}, {}, 'opts');
+    return opts as HashBatchOpts;
+  };
   const hasOutputOpts = (opts?: any) => {
     const raw = rawOutputOpts(opts);
     return raw.dkLen !== undefined || raw.out !== undefined || raw.outPos !== undefined;
