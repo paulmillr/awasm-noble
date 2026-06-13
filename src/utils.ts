@@ -3,14 +3,11 @@
  * @module
  */
 import type { HashInstance, HashState } from './hashes-abstract.ts';
-export function validateObject(
-  obj: Record<string, any>,
-  _fields: any,
-  _optFields: any,
-  kind: string
-) {
+
+export function aobject<T extends object>(obj: unknown, kind: string): T {
   if (!(typeof obj === 'object' && obj !== null))
     throw new Error(`expected ${kind} to be an object`);
+  return obj as T;
 }
 
 /**
@@ -234,7 +231,7 @@ export function abytes(
  * ```
  */
 export function aexists(instance: any, checkFinished = true): void {
-  validateObject(instance, {}, {}, 'instance');
+  aobject(instance, 'instance');
   if (instance.destroyed) throw new Error('Hash instance has been destroyed');
   if (checkFinished && instance.finished) throw new Error('Hash#digest() has already been called');
 }
@@ -253,8 +250,7 @@ export function aexists(instance: any, checkFinished = true): void {
  */
 export function aoutput(out: any, instance: any): void {
   abytes(out, undefined, 'output');
-  validateObject(instance, {}, {}, 'instance');
-  const min = instance.outputLen;
+  const min = aobject<{ outputLen: number }>(instance, 'instance').outputLen;
   anumber(min, 'instance.outputLen');
   if (out.length < min) {
     // Shared digestInto() contracts treat undersized destinations as a range problem, not a
@@ -834,11 +830,11 @@ export function checkOpts<T1 extends EmptyObj, T2 extends EmptyObj>(
   defaults: T1,
   opts?: T2
 ): T1 & T2 {
-  validateObject(defaults as Record<string, any>, {}, {}, 'defaults');
+  aobject(defaults, 'defaults');
   if (opts !== undefined) {
     if (isBytes(opts)) throw new TypeError('"opts" expected object, got Uint8Array');
     if (opts instanceof Date) throw new TypeError('"opts" expected object, got Date');
-    validateObject(opts as Record<string, any>, {}, {}, 'opts');
+    aobject(opts, 'opts');
   }
   const merged = Object.assign(defaults, opts);
   return merged as T1 & T2;
