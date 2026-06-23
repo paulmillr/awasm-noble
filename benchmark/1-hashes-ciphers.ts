@@ -14,21 +14,21 @@ function rbuf(n: number) {
     x ^= x << 5;
     out[i] = x & 0xff;
   }
-  SEED = x >>> 0; // guaranteed persisted
+  SEED = x >>> 0;
   return out;
 }
 
 const BUFFERS = {
   '32b': rbuf(32),
   '1mb': rbuf(1024 * 1024),
-  '10mb': rbuf(1024 * 1024 * 10)
+  '10mb': rbuf(1024 * 1024 * 10),
 };
 
 async function main() {
   const data = BUFFERS['1mb'];
-  const opts = { unit: 'mb', multiplier: 1 };
-  const cdata = BUFFERS['10mb']
-  const copts = { unit: 'mb', multiplier: 10 };
+  const opts = { bytes: data.byteLength };
+  const cdata = BUFFERS['10mb'];
+  const copts = { bytes: cdata.byteLength };
   const libs = wasm;
 
   // prettier-ignore
@@ -39,7 +39,7 @@ async function main() {
   const { chacha20poly1305, gcm, gcmsiv, chacha20, ecb, cbc, ctr } = libs;
   // prettier-ignore
   const key = rbuf(32), n12 = rbuf(12), n16 = rbuf(16);
-  // warm-up
+  // Warm up hot paths before measuring.
   for (let i = 0; i < 1000; i++) libs.sha256(data);
   for (let i = 0; i < 1000; i++) chacha20poly1305(key, n12).encrypt(cdata);
 

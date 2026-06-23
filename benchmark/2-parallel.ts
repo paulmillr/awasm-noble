@@ -14,7 +14,7 @@ function rbuf(n: number) {
     x ^= x << 5;
     out[i] = x & 0xff;
   }
-  SEED = x >>> 0; // guaranteed persisted
+  SEED = x >>> 0;
   return out;
 }
 
@@ -29,9 +29,9 @@ const BUFFERS = {
 async function main_threads() {
   const CHUNKS = 48;
   const data = BUFFERS['1mb'];
-  const opts = { unit: 'mb', multiplier: CHUNKS };
-  const cdata = BUFFERS['10mb']
-  const copts = { unit: 'mb', multiplier: 10 };
+  const opts = { bytes: data.byteLength * CHUNKS };
+  const cdata = BUFFERS['10mb'];
+  const copts = { bytes: cdata.byteLength };
   const libs = wasm_threads;
 
   const chunks = Array(CHUNKS).fill(data);
@@ -42,9 +42,9 @@ async function main_threads() {
   const { chacha20poly1305, gcm, gcmsiv, chacha20, ecb, cbc, ctr } = libs;
   // prettier-ignore
   const key = rbuf(32), n12 = rbuf(12), n16 = rbuf(16), n24 = rbuf(24);
+  // Warm up workers and cipher constructors before measuring.
   let start = Date.now();
   while (5000 > Date.now() - start) {
-    // warm-up
     await libs.sha256.parallel(chunks);
     await chacha20poly1305(key, n12).encrypt(cdata);
   }
@@ -55,8 +55,9 @@ async function main_threads() {
   }
   await bench(`blake3 ${CHUNKS}x1mb`, () => libs.blake3.parallel(chunks), opts);
   const b3buf = [BUFFERS['1gb']];
-  const b3o = { unit: 'mb', multiplier: 1024 }
-  await bench('blake3 1x1gb', () => libs.blake3.parallel(b3buf), b3o);
+  await bench('blake3 1x1gb', () => libs.blake3.parallel(b3buf), {
+    bytes: b3buf[0].byteLength,
+  });
   const hashes2 = ['ripemd160', 'md5', 'sha1'];
   for (const title of hashes2) {
     const hash = libs[title];
