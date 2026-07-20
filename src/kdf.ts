@@ -30,6 +30,7 @@ type KDFOpts = {
   dkLen?: number; // key length
   asyncTick?: number; // block execution max time
   maxmem?: number;
+  /** Do not start another mkAsync-backed operation until this callback returns. */
   onProgress?: (progress: number) => void;
   nextTick?: () => Promise<void>;
 };
@@ -105,8 +106,12 @@ function mkKDF<O extends KDFOpts>(
       const { dkLen, asyncTick, maxmem, onProgress, nextTick } = _opts;
       anumber(dkLen, 'dkLen');
       anumber(maxmem, 'maxmem');
-      const _setup = (opts: TArg<AsyncOpts>) =>
-        setup({ asyncTick, onProgress, nextTick, ...(opts as AsyncOpts) });
+      const _setup = ((opts: TArg<AsyncOpts>) =>
+        setup({ asyncTick, onProgress, nextTick, ...(opts as AsyncOpts) })) as AsyncSetup & {
+        isAsync?: boolean;
+      };
+      // Preserve mkAsync's execution mode so shared-state KDFs only checkpoint async calls.
+      _setup.isAsync = (setup as AsyncSetup & { isAsync?: boolean }).isAsync;
       return cb(_setup, password, salt, _opts as O & { dkLen: number; maxmem: number });
     }
   );
@@ -268,10 +273,13 @@ function argon2Opts(opts: TArg<ArgonOpts>) {
 }
 
 /**
- * Local Argon2 backend block cap used to bound the resident working matrix per batch.
+ * Local Argon2 backend block cap used to bound the fixed scratch window for each batch.
  * Kept as a pure exported constant so unrelated bundles can tree-shake it away.
  */
-export const ARGON_MAX_BLOCKS: number = /* @__PURE__ */ (() => 10 * 1024)();
+const ARGON_WINDOW_BLOCKS = 12;
+const ARGON_MAX_PARALLEL = 8;
+export const ARGON_MAX_BLOCKS: number = /* @__PURE__ */ (() =>
+  ARGON_WINDOW_BLOCKS * ARGON_MAX_PARALLEL)();
 /** RFC 9106 sync-points constant `SL = 4`, fixed by the Argon2 design. */
 export const ARGON2_SYNC_POINTS: number = 4;
 
@@ -378,37 +386,49 @@ function mkArgon2(
       }
       clean(BUF, H0);
 
-      const MIN_BLOCKS = 8; // actually 5, but just in case
-      const MAX_PARALLEL = Math.min(p, Math.floor(ARGON_MAX_BLOCKS / MIN_BLOCKS), 8);
-      const inputBlocksChunks = [];
+      const MAX_PARALLEL = Math.min(p, ARGON_MAX_PARALLEL);
+      const inputBlocksChunks: Uint32Array[] = [];
       const MAX_BLOCKS = Math.floor(ARGON_MAX_BLOCKS / MAX_PARALLEL);
       // console.log('MAX_BLOCKS', { MAX_BLOCKS, MAX_PARALLEL });
       const stride = MAX_BLOCKS * 256;
-      const usedInputSize = MAX_PARALLEL * stride;
-      const currentState = INPUT_BLOCKS.subarray(0, usedInputSize);
-      let savedInput32: Uint32Array | undefined;
-      const progress = setup({
-        total: t * ARGON2_SYNC_POINTS * p * segmentLen - 2 * p,
-        stateBytes: currentState.byteLength,
-        save: (state: TArg<Uint8Array>) => {
-          if (!savedInput32) savedInput32 = u32(state);
-          savedInput32.set(currentState);
-          // We can probably skip this, but this is neccessary to verify save/restore
-          // NOTE: this impacts perf, but otherwise somebody can read sensitive data between pauses.
-          INDICES.fill(0);
-          REF_INDICES.fill(0);
-          REF_BLOCKS.fill(0);
-          INPUT_BLOCKS.fill(0);
-        },
-        restore: (state: TArg<Uint8Array>) => {
-          if (!savedInput32) savedInput32 = u32(state);
-          currentState.set(savedInput32);
-        },
-      });
-
-      for (let i = 0; i < MAX_PARALLEL; i++) {
-        const stride = MAX_BLOCKS * 256;
+      // Four reserved blocks plus eight outputs minimize checkpoint traffic without starving the
+      // generated kernel; smaller measured windows lose throughput despite copying less state.
+      const MAX_BUFFER_SIZE = ARGON_WINDOW_BLOCKS;
+      for (let i = 0; i < MAX_PARALLEL; i++)
         inputBlocksChunks.push(INPUT_BLOCKS.subarray(i * stride, (i + 1) * stride));
+      const total = t * ARGON2_SYNC_POINTS * p * segmentLen - 2 * p;
+      let progress: ReturnType<AsyncSetup>;
+      if ((setup as AsyncSetup & { isAsync?: boolean }).isAsync) {
+        const checkpointStride = MAX_BUFFER_SIZE * perBlock;
+        const touchedBlocks = MAX_PARALLEL * MAX_BUFFER_SIZE;
+        let savedInput32: Uint32Array | undefined;
+        progress = setup({
+          total,
+          stateBytes: MAX_PARALLEL * checkpointStride * 4,
+          save: (state: TArg<Uint8Array>) => {
+            if (!savedInput32) savedInput32 = u32(state);
+            for (let i = 0; i < MAX_PARALLEL; i++)
+              savedInput32.set(
+                inputBlocksChunks[i].subarray(0, checkpointStride),
+                i * checkpointStride
+              );
+            // Shared scratch must not expose this call's state while another async call runs.
+            INDICES.subarray(0, touchedBlocks).fill(0);
+            REF_INDICES.subarray(0, touchedBlocks).fill(0);
+            REF_BLOCKS.subarray(0, touchedBlocks * perBlock).fill(0);
+            for (let i = 0; i < MAX_PARALLEL; i++)
+              inputBlocksChunks[i].subarray(0, checkpointStride).fill(0);
+          },
+          restore: (state: TArg<Uint8Array>) => {
+            if (!savedInput32) savedInput32 = u32(state);
+            for (let i = 0; i < MAX_PARALLEL; i++)
+              inputBlocksChunks[i]
+                .subarray(0, checkpointStride)
+                .set(savedInput32.subarray(i * checkpointStride, (i + 1) * checkpointStride));
+          },
+        });
+      } else {
+        progress = setup({ total });
       }
 
       const address_chunks = inputBlocksChunks.map((i: TArg<Uint32Array>) => i.subarray(0, 256));
@@ -448,9 +468,9 @@ function mkArgon2(
               );
             }
             // TODO: Very fragile part here, should be MAX_BLOCKS, but breaks in that case
-            const MAX_BUFFER_SIZE = 1024;
             let cursor = 3;
             let flushStartRel = startPos;
+            let addressReady = false;
             for (let batchStart = startPos; batchStart < segmentLen; ) {
               let wasmStart = cursor + 1;
               let slots = MAX_BUFFER_SIZE - wasmStart;
@@ -480,6 +500,7 @@ function mkArgon2(
                 wasmStart = 4;
                 flushStartRel = batchStart;
                 slots = MAX_BUFFER_SIZE - 4;
+                addressReady = false;
               }
 
               const remaining = segmentLen - batchStart;
@@ -497,19 +518,23 @@ function mkArgon2(
                 }
               }
               // B. Generate Addresses
-              // Pass flushStartRel to WASM
-              mod.getAddresses(
-                0,
-                LANES_LEFT,
-                batchSize,
-                laneLen,
-                segmentLen,
-                batchStart,
-                lanes,
-                cursor,
-                flushStartRel,
-                MAX_PARALLEL
-              );
+              // Data-dependent mode prepares the next address inside the fused compress call below.
+              if (dataIndependent || !addressReady) {
+                // Pass flushStartRel to WASM
+                mod.getAddresses(
+                  0,
+                  LANES_LEFT,
+                  batchSize,
+                  laneLen,
+                  segmentLen,
+                  batchStart,
+                  lanes,
+                  cursor,
+                  flushStartRel,
+                  MAX_PARALLEL
+                );
+                addressReady = true;
+              }
               // C. Cache Miss Loading
               // Optimized: WASM handles dirty buffer, JS only does true misses
               for (let chunk = 0; chunk < LANES_LEFT; chunk++) {
@@ -524,8 +549,31 @@ function mkArgon2(
                 }
               }
               // D. Run WASM Kernel
-              mod.compress(0, LANES_LEFT, batchSize, cursor, needXor ? 1 : 0, MAX_PARALLEL);
-              if (progress(LANES_LEFT * batchSize)) yield;
+              if (dataIndependent) {
+                mod.compress(0, LANES_LEFT, batchSize, cursor, needXor ? 1 : 0, MAX_PARALLEL);
+              } else {
+                const hasNext = batchStart + 1 < segmentLen && cursor + 2 < MAX_BUFFER_SIZE ? 1 : 0;
+                mod.compressAndGetAddress(
+                  0,
+                  LANES_LEFT,
+                  laneLen,
+                  segmentLen,
+                  batchStart,
+                  lanes,
+                  cursor,
+                  flushStartRel,
+                  MAX_PARALLEL,
+                  needXor ? 1 : 0,
+                  hasNext
+                );
+                addressReady = !!hasNext;
+              }
+              if (progress(LANES_LEFT * batchSize)) {
+                // Async save/restore only keeps the input window; fused data-dependent addresses
+                // are scratch state and must be recomputed after resume.
+                addressReady = false;
+                yield;
+              }
               batchStart += batchSize;
               cursor += batchSize;
             }

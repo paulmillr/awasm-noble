@@ -949,13 +949,8 @@ export function mkHash<Mod extends HashMod, Opts>(
     hashImpl = (msg, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) =>
       hashSync(msg, opts as MergeOpts<Opts, OutputOpts>);
     hashAsyncImpl = async (msg, opts?: TArg<MergeOpts<Opts, OutputOpts> & AsyncRunOpts>) => {
-      const rawOpts = opts as (MergeOpts<Opts, OutputOpts> & AsyncRunOpts) | undefined;
-      if (!rawOpts) return hashSync(msg, {} as MergeOpts<Opts, OutputOpts>);
-      return rawOpts.asyncTick !== undefined ||
-        rawOpts.onProgress !== undefined ||
-        rawOpts.nextTick !== undefined
-        ? hashRun.async(msg, rawOpts)
-        : hashSync(msg, rawOpts);
+      const rawOpts = (opts || {}) as MergeOpts<Opts, OutputOpts> & AsyncRunOpts;
+      return hashRun.async(msg, rawOpts);
     };
     chunksImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) =>
       chunksSync(parts, opts as Opts & HashBatchOpts);
@@ -963,13 +958,8 @@ export function mkHash<Mod extends HashMod, Opts>(
       parts: TArg<Uint8Array[]>,
       opts?: TArg<Opts & HashBatchOpts & AsyncRunOpts>
     ) => {
-      const rawOpts = opts as (Opts & HashBatchOpts & AsyncRunOpts) | undefined;
-      if (!rawOpts) return chunksSync(parts, {} as Opts & HashBatchOpts);
-      return rawOpts.asyncTick !== undefined ||
-        rawOpts.onProgress !== undefined ||
-        rawOpts.nextTick !== undefined
-        ? chunksRun.async(parts, rawOpts)
-        : chunksSync(parts, rawOpts);
+      const rawOpts = (opts || {}) as Opts & HashBatchOpts & AsyncRunOpts;
+      return chunksRun.async(parts, rawOpts);
     };
     parallelImpl = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashParallelOpts>) =>
       parallelSync(parts, opts as Opts & HashParallelOpts);
@@ -977,13 +967,8 @@ export function mkHash<Mod extends HashMod, Opts>(
       parts: TArg<Uint8Array[]>,
       opts?: TArg<Opts & HashParallelOpts & AsyncRunOpts>
     ) => {
-      const rawOpts = opts as (Opts & HashParallelOpts & AsyncRunOpts) | undefined;
-      if (!rawOpts) return parallelSync(parts, {} as Opts & HashParallelOpts);
-      return rawOpts.asyncTick !== undefined ||
-        rawOpts.onProgress !== undefined ||
-        rawOpts.nextTick !== undefined
-        ? parallelRun.async(parts, rawOpts)
-        : parallelSync(parts, rawOpts);
+      const rawOpts = (opts || {}) as Opts & HashParallelOpts & AsyncRunOpts;
+      return parallelRun.async(parts, rawOpts);
     };
     createImpl = (opts = {} as TArg<CreateOpts<Opts>>) => {
       const rawOpts = opts as CreateOpts<Opts>;

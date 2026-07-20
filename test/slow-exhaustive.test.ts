@@ -5,13 +5,13 @@ import * as wasm from '../src/targets/wasm/index.ts';
 import * as wasm_threads from '../src/targets/wasm_threads/index.ts';
 import { WP } from '../src/workers.ts';
 import { NOBLE } from './noble-all.ts';
-import { startTests } from './platforms.ts';
+import { dropThreads, startTests } from './platforms.ts';
 
 const EMPTY = new Uint8Array(0);
 const MAX = 16 * 1024 + 1;
 const SIZES = Array.from({ length: MAX }, (_, i) => i + 1);
 const ASYNC_OPTS = { asyncTick: 0 };
-const PLATFORMS = { wasm, wasm_threads, js } as const;
+const PLATFORMS = dropThreads({ wasm, wasm_threads, js } as const);
 const HASH_NAMES = [
   'blake224',
   'blake256',

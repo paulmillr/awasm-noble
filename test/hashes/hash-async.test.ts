@@ -77,6 +77,29 @@ for (const name in PLATFORMS) {
       eql(progress, [1]);
     });
 
+    should('progress callback rejects async hash entry without scheduler options', async () => {
+      const message = 'onProgress callback must not start another operation before it returns';
+      let nested: Promise<string>[] | undefined;
+      await p.sha256.async(smallBatch[0], {
+        onProgress: () => {
+          if (nested) return;
+          nested = [
+            p.sha512.async(smallBatch[0]),
+            p.sha512.chunks.async([smallBatch[0]], { dkLen: 16 }),
+            p.sha512.parallel.async(smallBatch, { dkLen: 16 }),
+          ].map(async (call) => {
+            try {
+              await call;
+              return 'resolved';
+            } catch (error) {
+              return error instanceof Error ? error.message : String(error);
+            }
+          });
+        },
+      });
+      eql(await Promise.all(nested!), [message, message, message]);
+    });
+
     should('sha256 async survives interleaved hash activity', async () => {
       const sync = p.sha256(msg);
       let ticks = 0;

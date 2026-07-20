@@ -133,19 +133,19 @@ export const sha512 = {
     rounds: 80,
     shifts: [1, 8, 7, 19, 61, 6, 14, 18, 41, 28, 34, 39],
   },
-  compilerOpts: { wasmTee: true },
+  compilerOpts: {},
 } satisfies ModuleSpec<'genSha2'>;
 export const sha1 = {
   fn: 'genSha1',
   type: 'u32',
   opts: undefined,
-  compilerOpts: { wasmTeeSimd: true },
+  compilerOpts: {},
 } satisfies ModuleSpec<'genSha1'>;
 export const ripemd160 = {
   fn: 'genRipemd',
   type: 'u32',
   opts: undefined,
-  compilerOpts: { wasmTee: false },
+  compilerOpts: {},
 } satisfies ModuleSpec<'genRipemd'>;
 export const md5 = {
   fn: 'genMd5',
@@ -195,7 +195,7 @@ export const blake2b = {
     shifts: [32, 24, 16, 63],
     IV: constants.B2B_IV_U64,
   },
-  compilerOpts: { jsOpsPerFn: 80_000 },
+  compilerOpts: {},
 } satisfies ModuleSpec<'genBlake2'>;
 export const blake3 = {
   fn: 'genBlake3',

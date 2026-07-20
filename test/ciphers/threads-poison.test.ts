@@ -27,6 +27,9 @@ const checkSame = (
 };
 
 describe('threads poison (wasm vs wasm_threads)', () => {
+  // Inherently threaded (compares wasm vs wasm_threads, spins the pool): NO_THREADS skips
+  // the whole file — see test/platforms.ts dropThreads.
+  if (process.env.NO_THREADS) return;
   should('workers online', async () => {
     await WP.waitOnline();
   });

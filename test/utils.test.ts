@@ -279,6 +279,75 @@ describe('utils etc', () => {
     eql(run(), Uint8Array.from([1]));
     eql(progress, [1]);
   });
+  should('mkAsync sync progress rejects every immediate cross-wrapper call', async () => {
+    const message = 'onProgress callback must not start another operation before it returns';
+    let innerEntries = 0;
+    const inner = u.mkAsync(function* (setup, value: number) {
+      innerEntries++;
+      const tick = setup({ total: 1 });
+      tick();
+      return value;
+    });
+    let nested: Promise<number> | undefined;
+    let self: Promise<number> | undefined;
+    let deferred: Promise<number> | undefined;
+    let outerEntries = 0;
+    const outer = u.mkAsync(function* (setup) {
+      outerEntries++;
+      const tick = setup({
+        total: 2,
+        onProgress: (progress) => {
+          if (progress !== 0.5) return;
+          throws(() => outer(), { message });
+          self = outer.async();
+          throws(() => inner(2), { message });
+          nested = inner.async(3);
+          deferred = Promise.resolve().then(() => inner(4));
+        },
+      });
+      tick();
+      tick();
+      return 1;
+    });
+    eql(outer(), 1);
+    eql([outerEntries, innerEntries], [1, 0]);
+    await rejects(self!, { message });
+    await rejects(nested!, { message });
+    eql(await deferred, 4);
+    eql([inner(5), await Promise.all([inner.async(6), inner.async(7)])], [5, [6, 7]]);
+    eql([outerEntries, innerEntries], [1, 4]);
+  });
+  should(
+    'mkAsync async progress rejects immediate calls and releases after callback failure',
+    async () => {
+      const message = 'onProgress callback must not start another operation before it returns';
+      const marker = new Error('stop progress');
+      const inner = u.mkAsync(function* (setup, value: number) {
+        const tick = setup({ total: 1 });
+        tick();
+        return value;
+      });
+      let called = false;
+      const outer = u.mkAsync(function* (setup) {
+        const tick = setup({
+          total: 1,
+          asyncTick: 0,
+          onProgress: () => {
+            called = true;
+            throws(() => inner(8), { message });
+            throw marker;
+          },
+        });
+        if (tick()) yield;
+        return 1;
+      });
+      await rejects(
+        () => outer.async(),
+        (error) => error === marker
+      );
+      eql([called, inner(9), await inner.async(10)], [true, 9, 10]);
+    }
+  );
 });
 
 should.runWhen(import.meta.url);

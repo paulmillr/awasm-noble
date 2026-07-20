@@ -30,7 +30,10 @@ Main issue, how the to import modules?
 - but with lazy init they are not instantiated before.
   */
   const tmp = new Uint8Array(32);
-  for (const [ver, lib] of Object.entries({ js, wasm, wasm_threads })) {
+  // NO_THREADS check is inlined (not platforms.dropThreads) because platforms.ts imports
+  // this file — see dropThreads for the rationale.
+  const libs = process.env.NO_THREADS ? { js, wasm } : { js, wasm, wasm_threads };
+  for (const [ver, lib] of Object.entries(libs)) {
     for (const k in lib) {
       const fn = lib[k];
       if (typeof fn !== 'function') continue;
@@ -75,7 +78,8 @@ export function watchMemory() {
   const ready = (async () => {
     const mem = {};
     for (const mod in MODULES) {
-      for (const ver of ['wasm', 'js', 'wasm_threads']) {
+      const vers = process.env.NO_THREADS ? ['wasm', 'js'] : ['wasm', 'js', 'wasm_threads'];
+      for (const ver of vers) {
         const curMod = (await import(`../src/targets/${ver}/${mod}.js`)).default();
         const skip: [number, number][] = [];
         for (const k in curMod.segments) {

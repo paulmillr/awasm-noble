@@ -15,14 +15,43 @@ import { mkCipherStub } from '../src/ciphers-abstract.ts';
 import { ctr as def_ctr } from '../src/ciphers.ts';
 import { mkHashStub } from '../src/hashes-abstract.ts';
 import { scrypt as def_scrypt, sha256 as def_sha256 } from '../src/hashes.ts';
-import { mkKDFStub } from '../src/kdf.ts';
+import { ARGON_MAX_BLOCKS, mkKDFStub, pbkdf2 } from '../src/kdf.ts';
+import { __TEST as kdfTest } from '../src/modules/kdf.ts';
 import { concatBytes } from '../src/utils.ts';
+import { dropThreads } from './platforms.ts';
 
 const bytes = (len: number, seed = 1) =>
   Uint8Array.from({ length: len }, (_, i) => (i * 17 + seed) & 255);
 const msg = bytes(333, 9);
 const msg2 = bytes(333, 19);
-const compiled = { js, wasm, wasm_threads };
+const compiled = dropThreads({ js, wasm, wasm_threads });
+const asyncKDFs = (platform: any) => {
+  const pbkdf = pbkdf2(platform.sha256);
+  return [
+    {
+      name: 'Argon',
+      outer: platform.argon2id,
+      nested: platform.argon2i,
+      opts: { t: 2, m: 64, p: 1, dkLen: 16 },
+      nestedOpts: { t: 1, m: 32, p: 1, dkLen: 16 },
+    },
+    {
+      name: 'scrypt',
+      outer: platform.scrypt,
+      nested: platform.scrypt,
+      opts: { N: 16, r: 1, p: 1, dkLen: 32 },
+      nestedOpts: { N: 8, r: 1, p: 1, dkLen: 16 },
+    },
+    {
+      name: 'PBKDF2',
+      // PBKDF2 state is call-local, but mkAsync intentionally has one uniform callback contract.
+      outer: pbkdf,
+      nested: pbkdf,
+      opts: { c: 8, dkLen: 32 },
+      nestedOpts: { c: 4, dkLen: 16 },
+    },
+  ];
+};
 const macKeys = {
   poly1305: bytes(32, 21),
   cmac: bytes(16, 22),
@@ -60,6 +89,23 @@ const parallelCall = (
 };
 
 describe('noble platform', () => {
+  should('Argon allocates only its active fixed scratch topology', () => {
+    // Each of the eight batched lanes needs four reserved blocks plus eight output blocks.
+    eql(ARGON_MAX_BLOCKS, 12 * 8);
+  });
+
+  should('Argon uses the native scalar kernel only for synchronous Wasm', () => {
+    eql(
+      [
+        kdfTest.nativeArgon({ native64bit: false, threads: false }, 1),
+        kdfTest.nativeArgon({ native64bit: true, threads: false }, 1),
+        kdfTest.nativeArgon({ native64bit: true, threads: false }, 4),
+        kdfTest.nativeArgon({ native64bit: true, threads: true }, 1),
+      ],
+      [false, true, false, false]
+    );
+  });
+
   should('hashes: one-shot, create, chunks, parallel, async, out/outPos', async () => {
     const exp = nobleSha2.sha256(msg);
     eql(noble.sha256(msg), exp);
@@ -301,6 +347,182 @@ describe('noble platform', () => {
       await rejects(() => nfn.async(c.args[0], c.args[1], badOpts), {
         message: '"nextTick" is not supported',
       });
+    }
+  });
+
+  should('mkAsync-backed KDFs reject synchronous progress-callback reentry', () => {
+    for (const [platformName, platform] of Object.entries(compiled)) {
+      for (const c of asyncKDFs(platform)) {
+        const name = `${platformName}/${c.name}`;
+        const expected = c.outer('password', 'salt-salt', c.opts);
+        let called = false;
+        const actual = c.outer('password', 'salt-salt', {
+          ...c.opts,
+          onProgress: () => {
+            if (called) return;
+            called = true;
+            throws(() => c.nested('nested', 'salt-nested', c.nestedOpts), {
+              message: 'onProgress callback must not start another operation before it returns',
+            });
+          },
+        });
+        eql(called, true, `${name}: progress callback was called`);
+        eql(actual, expected, `${name}: rejected reentry did not corrupt outer call`);
+        throws(
+          () =>
+            c.outer('password', 'salt-salt', {
+              ...c.opts,
+              onProgress: () => {
+                throw new Error('stop progress');
+              },
+            }),
+          { message: 'stop progress' }
+        );
+        eql(
+          c.outer('password', 'salt-salt', c.opts),
+          expected,
+          `${name}: callback failure released the reentry guard`
+        );
+      }
+    }
+  });
+
+  should(
+    'mkAsync-backed KDFs reject immediate async reentry and permit deferred work',
+    async () => {
+      for (const [platformName, platform] of Object.entries(compiled)) {
+        for (const c of asyncKDFs(platform)) {
+          const name = `${platformName}/${c.name}`;
+          const expected = c.outer('password', 'salt-salt', c.opts);
+          const nestedExpected = c.nested('nested', 'salt-nested', c.nestedOpts);
+          let nested: Promise<Uint8Array> | undefined;
+          const actual = c.outer('password', 'salt-salt', {
+            ...c.opts,
+            onProgress: () => {
+              if (!nested) nested = c.nested.async('nested', 'salt-nested', c.nestedOpts);
+            },
+          });
+          eql(actual, expected, `${name}: rejected async reentry did not corrupt outer call`);
+          await rejects(nested!, {
+            message: 'onProgress callback must not start another operation before it returns',
+          });
+
+          let deferred: Promise<Uint8Array> | undefined;
+          const deferredOuter = c.outer('password', 'salt-salt', {
+            ...c.opts,
+            onProgress: () => {
+              if (!deferred)
+                deferred = Promise.resolve().then(() =>
+                  c.nested('nested', 'salt-nested', c.nestedOpts)
+                );
+            },
+          });
+          eql(deferredOuter, expected, `${name}: deferred outer call`);
+          eql(await deferred, nestedExpected, `${name}: deferred nested call`);
+
+          let asyncCalled = false;
+          const asyncOuter = await c.outer.async('password', 'salt-salt', {
+            ...c.opts,
+            asyncTick: 0,
+            onProgress: () => {
+              if (asyncCalled) return;
+              asyncCalled = true;
+              throws(() => c.nested('nested', 'salt-nested', c.nestedOpts), {
+                message: 'onProgress callback must not start another operation before it returns',
+              });
+            },
+          });
+          eql(asyncOuter, expected, `${name}: async outer call`);
+          eql(asyncCalled, true, `${name}: async outer callback was called`);
+          eql(
+            await Promise.all([
+              c.outer.async('password', 'salt-salt', { ...c.opts, asyncTick: 0 }),
+              c.nested.async('nested', 'salt-nested', { ...c.nestedOpts, asyncTick: 0 }),
+            ]),
+            [expected, nestedExpected],
+            `${name}: ordinary concurrent calls`
+          );
+        }
+      }
+    }
+  );
+
+  should('mkAsync progress reentry rejects across backends', () => {
+    const wasmCases = asyncKDFs(wasm);
+    for (const [pos, c] of asyncKDFs(js).entries()) {
+      const nested = wasmCases[pos];
+      const expected = c.outer('password', 'salt-salt', c.opts);
+      let called = false;
+      const actual = c.outer('password', 'salt-salt', {
+        ...c.opts,
+        onProgress: () => {
+          if (called) return;
+          called = true;
+          throws(() => nested.nested('nested', 'salt-nested', nested.nestedOpts), {
+            message: 'onProgress callback must not start another operation before it returns',
+          });
+        },
+      });
+      eql([actual, called], [expected, true], `${c.name}: cross-backend reentry`);
+    }
+  });
+
+  should('mkAsync progress guard spans generated and noble hash/cipher wrappers', async () => {
+    const message = 'onProgress callback must not start another operation before it returns';
+    const key = bytes(16, 41);
+    const nonce = bytes(16, 42);
+    let nested: Promise<string>[] | undefined;
+    await js.sha256.async(msg, {
+      onProgress: () => {
+        if (nested) return;
+        nested = [
+          wasm.sha512.async(msg),
+          noble.sha512.async(msg),
+          js.ctr(key, nonce).encrypt.async(msg),
+          noble.ctr(key, nonce).encrypt.async(msg),
+        ].map(async (call) => {
+          try {
+            await call;
+            return 'resolved';
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        });
+      },
+    });
+    eql(await Promise.all(nested!), [message, message, message, message]);
+  });
+
+  should('Argon async calls isolate shared module state', async () => {
+    const cases = [
+      { name: 'argon2d', password: 'pass-d', salt: 'salt-ddd', opts: { t: 1, m: 16, p: 1 } },
+      { name: 'argon2i', password: 'pass-i', salt: 'salt-iii', opts: { t: 1, m: 24, p: 1 } },
+      { name: 'argon2id', password: 'pass-id', salt: 'salt-idid', opts: { t: 1, m: 32, p: 2 } },
+      { name: 'argon2d', password: 'pass-d3', salt: 'salt-dd3', opts: { t: 1, m: 192, p: 3 } },
+      { name: 'argon2i', password: 'pass-i8', salt: 'salt-ii8', opts: { t: 1, m: 512, p: 8 } },
+      { name: 'argon2id', password: 'pass-i9', salt: 'salt-id9', opts: { t: 1, m: 576, p: 9 } },
+    ] as const;
+    for (const [name, platform] of Object.entries({ js, wasm })) {
+      const expected = cases.map((c) => platform[c.name](c.password, c.salt, c.opts));
+      let ticks = 0;
+      let updates = 0;
+      const actual = await Promise.all(
+        cases.map((c) =>
+          platform[c.name].async(c.password, c.salt, {
+            ...c.opts,
+            asyncTick: 0,
+            nextTick: async () => {
+              ticks++;
+            },
+            onProgress: () => {
+              updates++;
+            },
+          })
+        )
+      );
+      eql(actual, expected, `${name}: interleaved outputs`);
+      eql(ticks > 0, true, `${name}: yielded`);
+      eql(updates > 0, true, `${name}: reported progress`);
     }
   });
 

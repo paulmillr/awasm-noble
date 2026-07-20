@@ -12,6 +12,11 @@ import { salsaCore } from './ciphers.ts';
 
 const _0xffffffffn = /* @__PURE__ */ BigInt(0xffffffff);
 const _1n = /* @__PURE__ */ BigInt(1);
+// Compiler backend flags are sparse; an absent capability is false.
+const nativeArgon = (flags: { native64bit?: boolean; threads?: boolean }, lanes: number) =>
+  !!flags.native64bit && !flags.threads && lanes === 1;
+
+export const __TEST = { nativeArgon };
 
 export function genScrypt(_type: TypeName, _opts = {}) {
   // Deno publish hits TS2589 on the internal 16-word state here; keep this generator-only helper
@@ -100,31 +105,39 @@ export function genArgon2(_type: TypeName, _opts: {}) {
         const T = f.getType('u64', lanes);
         const MASK32 = T.const(_0xffffffffn);
         const firstDim = u32.div(u32.const(ARGON_MAX_BLOCKS), MAX_PARALLEL);
-        function blamka(A: any, B: any) {
-          const loProd = T.mul(T.and(A, MASK32), T.and(B, MASK32)); // 32×32 → low 64 mod 2^64
-          return T.add(A, B, T.shl(loProd, 1)); // + 2 * loProd
-        }
-        function Gpart(S: any[], v0: number, v1: number, v2: number, shift: number) {
-          S[v0] = blamka(S[v0], S[v1]);
-          S[v2] = T.rotr(T.xor(S[v2], S[v0]), shift);
-        }
-        function G(S: any[], a: number, b: number, c: number, d: number) {
-          Gpart(S, a, b, d, 32);
-          Gpart(S, c, d, b, 24);
-          Gpart(S, a, b, d, 16);
-          Gpart(S, c, d, b, 63);
-        }
-        function P(S: any[]) {
-          G(S, 0, 4, 8, 12);
-          G(S, 1, 5, 9, 13);
-          G(S, 2, 6, 10, 14);
-          G(S, 3, 7, 11, 15);
+        const blamka = (U: any, mask: any, A: any, B: any) => {
+          const loProd = U.mul(U.and(A, mask), U.and(B, mask)); // 32×32 → low 64 mod 2^64
+          return U.add(A, B, U.shl(loProd, 1)); // + 2 * loProd
+        };
+        const G = (U: any, mask: any, S: any[], ...chains: [number, number, number, number][]) => {
+          const parts = [
+            [0, 1, 3, 32],
+            [2, 3, 1, 24],
+            [0, 1, 3, 16],
+            [2, 3, 1, 63],
+          ];
+          // Multiple chains are quarter-interleaved to expose independent native vector work.
+          for (const [v0, v1, v2, shift] of parts) {
+            for (const chain of chains) {
+              const a = chain[v0];
+              const b = chain[v1];
+              const c = chain[v2];
+              S[a] = blamka(U, mask, S[a], S[b]);
+              S[c] = U.rotr(U.xor(S[c], S[a]), shift);
+            }
+          }
+        };
+        const P = (S: any[]) => {
+          G(T, MASK32, S, [0, 4, 8, 12]);
+          G(T, MASK32, S, [1, 5, 9, 13]);
+          G(T, MASK32, S, [2, 6, 10, 14]);
+          G(T, MASK32, S, [3, 7, 11, 15]);
 
-          G(S, 0, 5, 10, 15);
-          G(S, 1, 6, 11, 12);
-          G(S, 2, 7, 8, 13);
-          G(S, 3, 4, 9, 14);
-        }
+          G(T, MASK32, S, [0, 5, 10, 15]);
+          G(T, MASK32, S, [1, 6, 11, 12]);
+          G(T, MASK32, S, [2, 7, 8, 13]);
+          G(T, MASK32, S, [3, 4, 9, 14]);
+        };
         const REF_BLOCKS = f.memory.refBlocks.reshape(firstDim, MAX_PARALLEL, 128);
         const REF_INDICES = f.memory.refIndices.reshape(firstDim, MAX_PARALLEL);
         const INPUT_BLOCKS = f.memory.inputBlocks.reshape(
@@ -132,6 +145,82 @@ export function genArgon2(_type: TypeName, _opts: {}) {
           u32.div(u32.const(ARGON_MAX_BLOCKS), MAX_PARALLEL),
           128
         );
+
+        // A scalar batch tail has one Argon block, so native u64x2 lanes can work across that
+        // block instead of emulating parallel lanes. JS and threaded memory keep the compact
+        // reference kernel; this path uses the same fixed scratch window and ABI.
+        if (nativeArgon(f.flags, lanes)) {
+          const V = f.types.u64x2;
+          const mask = V.const(_0xffffffffn);
+          const G2 = (S: any[]) => {
+            G(V, mask, S, [0, 1, 2, 3], [4, 5, 6, 7]);
+            return S;
+          };
+          const P2 = (S: any[]) => {
+            let [v0, v2, v4, v6, v1, v3, v5, v7] = G2([
+              S[0],
+              S[2],
+              S[4],
+              S[6],
+              S[1],
+              S[3],
+              S[5],
+              S[7],
+            ]);
+            let b45 = V.shuffleLanes(v2, v3, [1, 2]);
+            let b67 = V.shuffleLanes(v3, v2, [1, 2]);
+            let d45 = V.shuffleLanes(v7, v6, [1, 2]);
+            let d67 = V.shuffleLanes(v6, v7, [1, 2]);
+            [v0, b45, v5, d45, v1, b67, v4, d67] = G2([v0, b45, v5, d45, v1, b67, v4, d67]);
+            v2 = V.shuffleLanes(b67, b45, [1, 2]);
+            v3 = V.shuffleLanes(b45, b67, [1, 2]);
+            v6 = V.shuffleLanes(d45, d67, [1, 2]);
+            v7 = V.shuffleLanes(d67, d45, [1, 2]);
+            return [v0, v1, v2, v3, v4, v5, v6, v7];
+          };
+
+          f.doN([], perBatch, (i) => {
+            const curPrev = u32.add(i, prevPos);
+            const outPos = u32.add(curPrev, u32.const(1));
+            const refPos = REF_INDICES[outPos][batchPos].get();
+            const prev = INPUT_BLOCKS[batchPos][curPrev].as('u64x2');
+            const localRef = INPUT_BLOCKS[batchPos][refPos].as('u64x2');
+            const externalRef = REF_BLOCKS[outPos][batchPos].as('u64x2');
+            const output = INPUT_BLOCKS[batchPos][outPos].as('u64x2');
+            const rows = REF_BLOCKS[3][batchPos].as('u64x2');
+            const isLocal = u32.ne(outPos, refPos);
+            f.doN([], 8, (c) => {
+              const offset = u32.mul(c, u32.const(8));
+              const state = Array.from({ length: 8 }, (_, j) => {
+                const pos = u32.add(offset, u32.const(j));
+                // Pin the carried vector tuple: the generic batch scope otherwise infers its
+                // empty-state overload here, despite both branches returning one u64x2 value.
+                const [ref] = f.ifElse<[Val<'u64x2'>]>(
+                  isLocal,
+                  [V.const(BigInt(0))],
+                  () => [localRef[pos].get()],
+                  () => [externalRef[pos].get()]
+                );
+                return V.xor(prev[pos].get(), ref);
+              });
+              f.ifElse(
+                needXor,
+                [],
+                () =>
+                  state.forEach((value, j) => output[u32.add(offset, u32.const(j))].mut.xor(value)),
+                () => state.forEach((value, j) => output[u32.add(offset, u32.const(j))].set(value))
+              );
+              P2(state).forEach((value, j) => rows[u32.add(offset, u32.const(j))].set(value));
+            });
+            f.doN([], 8, (c) => {
+              const state = P2(
+                Array.from({ length: 8 }, (_, j) => rows[u32.add(c, u32.const(j * 8))].get())
+              );
+              state.forEach((value, j) => output[u32.add(c, u32.const(j * 8))].mut.xor(value));
+            });
+          });
+          return;
+        }
 
         f.doN([], perBatch, (i) => {
           const curPrev = u32.add(i, prevPos);
@@ -329,6 +418,49 @@ export function genArgon2(_type: TypeName, _opts: {}) {
             );
             REF_INDICES[currentPos][curBatchPos].set(finalIdx);
           });
+        });
+      }
+    )
+    .fn(
+      'compressAndGetAddress',
+      ['u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (
+        f,
+        batchPos,
+        batchLen,
+        laneLen,
+        segmentLen,
+        index,
+        lanes,
+        prevBlockPos,
+        flushStartRel,
+        MAX_PARALLEL,
+        needXor,
+        hasNext
+      ) => {
+        const { u32 } = f.types;
+        f.functions.compress.call(
+          batchPos,
+          batchLen,
+          u32.const(1),
+          prevBlockPos,
+          needXor,
+          MAX_PARALLEL
+        );
+        f.ifElse(hasNext, [], () => {
+          f.functions.getAddresses.call(
+            batchPos,
+            batchLen,
+            u32.const(1),
+            laneLen,
+            segmentLen,
+            u32.add(index, u32.const(1)),
+            lanes,
+            u32.add(prevBlockPos, u32.const(1)),
+            flushStartRel,
+            MAX_PARALLEL
+          );
         });
       }
     );

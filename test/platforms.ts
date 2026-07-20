@@ -14,13 +14,19 @@ for (const k in wasm) {
   if (typeof stubs[k]?.install === 'function') stubs[k].install(wasm[k]);
 }
 
-export const PLATFORMS = {
+// Threaded targets saturate every core via the worker pool; NO_THREADS=1 drops them so a
+// test run can coexist with benchmarks or other work without invalidating either.
+export const dropThreads = <T extends Record<string, any>>(obj: T): T =>
+  process.env.NO_THREADS
+    ? (Object.fromEntries(Object.entries(obj).filter(([k]) => !k.includes('threads'))) as T)
+    : obj;
+export const PLATFORMS = dropThreads({
   js,
   // js_threads,
   wasm_threads,
   wasm,
   stubs,
-};
+});
 
 const SLOT = '__NOBLE_TEST_PLATFORMS__';
 const wrapCipher = (platform: Record<string, any>) => {

@@ -852,6 +852,7 @@ export type AsyncOpts = {
   asyncTick?: number;
   /**
    * Optional progress callback receiving values in the `[0, 1]` range.
+   * Every mkAsync entrypoint in this module instance rejects until this callback returns.
    * @param progress - normalized progress value in the `[0, 1]` range.
    */
   onProgress?: (progress: number) => void;
@@ -883,8 +884,20 @@ export type AsyncFn<T extends any[], R> = ((...args: T) => R) & {
 };
 /** Converts a sync function shape into a sync + async callable shape. */
 export type Asyncify<F extends (...args: any[]) => any> = AsyncFn<Parameters<F>, ReturnType<F>>;
+const progressError = 'onProgress callback must not start another operation before it returns';
+let progressDepth = 0;
+const progressCall = (callback: (progress: number) => void, progress: number) => {
+  // Apply one uniform callback-extent policy even when wrappers use unrelated backends.
+  progressDepth++;
+  try {
+    callback(progress);
+  } finally {
+    progressDepth--;
+  }
+};
 /**
  * Build sync and async wrappers from the same generator body.
+ * While an `onProgress` callback runs, every wrapper from this module instance rejects entry.
  * @param cb_ - generator callback shared by sync and async variants.
  * @returns Function exposing both sync and `.async(...)` entrypoints.
  * @example
@@ -900,7 +913,7 @@ export function mkAsync<T extends any[], R>(
   cb_: TArg<(setup: AsyncSetup, ...args: T) => Generator<unknown, R, unknown>>
 ): AsyncFn<T, R> {
   const cb = cb_ as (setup: AsyncSetup, ...args: T) => Generator<unknown, R, unknown>;
-  const genSetup = (canReturn: boolean) => {
+  const genSetup = () => {
     let setupDone = false;
     let progressTotal = -1;
     let done = 0;
@@ -915,12 +928,12 @@ export function mkAsync<T extends any[], R>(
     let onNextTick = async () => {};
     return {
       save: () => {
-        if (!canReturn || !stateBytes) return;
+        if (!stateBytes) return;
         if (!state) state = new Uint8Array(stateBytes);
         onSave(state);
       },
       restore: () => {
-        if (!canReturn || !state) return;
+        if (!state) return;
         onRestore(state);
       },
       nextTick: () => onNextTick(),
@@ -934,26 +947,6 @@ export function mkAsync<T extends any[], R>(
         const rawOpts = _opts as AsyncOpts;
         if (setupDone) throw new Error('setup already called');
         setupDone = true;
-        if (!canReturn) {
-          anumber(rawOpts.total, 'total');
-          progressTotal = rawOpts.total;
-          const onProgress = rawOpts.onProgress;
-          if (onProgress !== undefined && typeof onProgress !== 'function')
-            throw new Error('onProgress must be a function');
-          if (!onProgress) {
-            return (inc: number = 1) => {
-              done += inc;
-              return false;
-            };
-          }
-          const callbackPer = Math.max(Math.floor(progressTotal / 10000), 1);
-          return (inc: number = 1) => {
-            done += inc;
-            if (!(done % callbackPer) || done === progressTotal)
-              onProgress(progressTotal ? done / progressTotal : 1);
-            return false;
-          };
-        }
         const opts = { ...rawOpts };
         if (opts.asyncTick === undefined) delete opts.asyncTick; // will override defaults otherwise
         const {
@@ -979,17 +972,14 @@ export function mkAsync<T extends any[], R>(
         if (save !== undefined) onSave = save;
         if (restore !== undefined) onRestore = restore;
         if (nextTick !== undefined) onNextTick = nextTick;
-        let needReturn = () => false;
-        if (canReturn) {
-          let ts = Date.now();
-          needReturn = () => {
-            // Date.now() is not monotonic, so in case if clock goes backwards we return return control too
-            const diff = Date.now() - ts;
-            if (diff >= 0 && diff < asyncTick) return false;
-            ts += diff;
-            return true;
-          };
-        }
+        let ts = Date.now();
+        const needReturn = () => {
+          // Date.now() is not monotonic, so in case if clock goes backwards we return return control too
+          const diff = Date.now() - ts;
+          if (diff >= 0 && diff < asyncTick) return false;
+          ts += diff;
+          return true;
+        };
         // Invoke callback if progress changes from 10.01 to 10.02
         // Allows to draw smooth progress bar on up to 8K screen
         const callbackPer = Math.max(Math.floor(progressTotal / 10000), 1);
@@ -1001,7 +991,7 @@ export function mkAsync<T extends any[], R>(
           progress = (inc: number = 1) => {
             done += inc;
             if (onProgress && (!(done % callbackPer) || done === total))
-              onProgress(total ? done / total : 1);
+              progressCall(onProgress, total ? done / total : 1);
             return needReturn();
           };
         }
@@ -1010,6 +1000,7 @@ export function mkAsync<T extends any[], R>(
     };
   };
   const res = (...args: T) => {
+    if (progressDepth) throw new Error(progressError);
     let setupDone = false;
     let progressTotal = -1;
     let done = 0;
@@ -1033,7 +1024,7 @@ export function mkAsync<T extends any[], R>(
         done += inc;
         // Keep zero-total sync progress aligned with the async path for empty-input callers.
         if (!(done % callbackPer) || done === progressTotal)
-          onProgress(progressTotal ? done / progressTotal : 1);
+          progressCall(onProgress, progressTotal ? done / progressTotal : 1);
         return false;
       };
     }) as AsyncSetupMode;
@@ -1046,7 +1037,8 @@ export function mkAsync<T extends any[], R>(
     return r.value;
   };
   res.async = async (...args: T) => {
-    const { setup, save, restore, onEnd, nextTick } = genSetup(true);
+    if (progressDepth) throw new Error(progressError);
+    const { setup, save, restore, onEnd, nextTick } = genSetup();
     const setupMode = setup as AsyncSetupMode;
     setupMode.isAsync = true;
     const g = cb(setupMode, ...args);
