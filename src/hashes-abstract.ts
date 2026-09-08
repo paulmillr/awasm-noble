@@ -21,6 +21,15 @@ import {
 } from './utils.ts';
 
 export type HashMod = {
+  digest?(
+    length: number,
+    maxBlocks: number,
+    blockLen: number,
+    suffix: number,
+    outBlocks: number,
+    maxOutBlocks: number,
+    outBlockLen: number
+  ): void;
   readonly segments: {
     readonly buffer: Uint8Array; // no need to copy on streaming mode
     readonly 'state.state_chunks': ReadonlyArray<Uint8Array>; // actual state for iv
@@ -106,7 +115,8 @@ export type HashDef<Mod extends HashMod, Opts = undefined> = {
     maxBlocks: number,
     mod: Mod,
     hash: HashInstance<Opts>,
-    opts: MergeOpts<Opts, OutputOpts>
+    opts: MergeOpts<Opts, OutputOpts>,
+    last?: boolean
     // We can use HashOpts via `this`.
   ) => void | { blocks?: number; outputLen?: number };
 };
@@ -324,19 +334,33 @@ export function mkHash<Mod extends HashMod, Opts>(
     inited = true;
     const { processBlocks, processOutBlocks, padding, reset } = mod;
     const BUFFER: Uint8Array = mod.segments.buffer;
+    const digest = BUFFER.subarray(0, outputLen);
     const STATE: Uint8Array = mod.segments.state_chunks[0];
     const STATE_CHUNKS: ReadonlyArray<Uint8Array> = mod.segments.state_chunks;
-    const parallelChunks = mod.segments.state_chunks.length;
     const maxBlocks = Math.floor(BUFFER.length / blockLen);
     const chunks = maxBlocks - 2; // 2 for padding
-    if (chunks < 1) throw new Error('wrong chunks');
     const maxOutBlocks = Math.floor(BUFFER.length / outBlockLen);
+    const outputBlocks = Math.ceil(outputLen / outBlockLen);
+    const parallelChunks = Math.min(
+      STATE_CHUNKS.length,
+      Math.floor(BUFFER.length / (blockLen * 3)), // At least 3 input blocks (for padding).
+      maxOutBlocks
+    );
+    if (parallelChunks < 1) throw new Error('wrong chunks');
     type PrefixState = { state: Uint8Array; buf: Uint8Array };
     const prefixStates = new WeakSet<Uint8Array>();
 
-    function initHash(opts: TArg<MergeOpts<Opts, OutputOpts>>, batchPos = 0) {
+    function initialize(max: number, opts: MergeOpts<Opts, OutputOpts>, last = false) {
+      try {
+        return init?.(0, max, mod, hash, opts, last);
+      } catch (error) {
+        // Initialization can preload a key before rejecting a later option.
+        reset(0, 1, BUFFER.length, outBlockLen, maxOutBlocks);
+        throw error;
+      }
+    }
+    function initHash(opts: TArg<MergeOpts<Opts, OutputOpts>>, last = false) {
       const rawOpts = opts as MergeOpts<Opts, OutputOpts>;
-      reset(batchPos, 1, 0, outBlockLen, maxOutBlocks);
       let blocks = 0;
       let streamOutputLen = outputLen;
       if (rawOpts.dkLen !== undefined) {
@@ -346,7 +370,7 @@ export function mkHash<Mod extends HashMod, Opts>(
           throw new RangeError(`"opts.dkLen" expected <= ${outputLen}, got ${streamOutputLen}`);
       }
       if (init) {
-        const i = init(batchPos, maxBlocks, mod, hash, rawOpts);
+        const i = initialize(maxBlocks, rawOpts, last);
         if (i && i.blocks !== undefined) blocks = i.blocks;
         if (i && i.outputLen !== undefined) streamOutputLen = i.outputLen;
       }
@@ -408,7 +432,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       let pos = 0; // global position in virtual concatenation
       let idx = 0; // which part
       let off = 0; // offset within current part
-      while (pos < totalLen) {
+      do {
         const take = Math.min(totalLen - pos, cap) | 0;
         // fill BUFFER[0..take) from parts[idx..] without concat
         let written = 0;
@@ -440,7 +464,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         }
         processBlocks(0, 1, blocks, maxBlocks, blockLen, isLast ? 1 : 0, left, padBlocks);
         pos += take;
-      }
+      } while (pos < totalLen);
       return;
     }
     // same as processMessage but with chunkPos.
@@ -551,7 +575,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         const emitted = takeBlocks * outBlockLen;
         const need = dkLen - produced;
         const takeBytes = need < emitted ? need : emitted;
-        copyFast(out, outPos + produced, BUFFER, 0, takeBytes);
+        copyFast(out, outPos + produced, takeBytes === outputLen ? digest : BUFFER, 0, takeBytes);
         maxWritten = Math.max(maxWritten, takeBytes, takeBlocks * outBlockLen);
         produced += takeBytes;
         blocksLeft -= takeBlocks;
@@ -631,7 +655,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         this.blockLen = blockLen;
         this.outputLen = opts.outputLen;
         this.state = copyBytes(STATE);
-        reset(0, 1, 0, outBlockLen, maxOutBlocks); // cleanup
+        reset(0, 1, (opts.blocks || 0) * blockLen, outBlockLen, maxOutBlocks); // cleanup
       }
       private restoreState() {
         copyFast(STATE, 0, this.state, 0, STATE.length);
@@ -723,10 +747,12 @@ export function mkHash<Mod extends HashMod, Opts>(
         // stream instances don't leak squeeze state into global hash wrappers.
         this.restoreState();
         const { out, outPos } = outChecked;
+        let maxWritten = 0;
         for (let pos = 0; pos < bytes; ) {
           if (this.pos >= outBlockLen) {
             // get next squeeze block
             processOutBlocks(0, 1, 1, maxOutBlocks, outBlockLen, 0); // never 'last' in XOF
+            maxWritten = outBlockLen;
             copyFast(this.buf, 0, BUFFER, 0, outBlockLen);
             this.pos = 0;
           }
@@ -737,7 +763,7 @@ export function mkHash<Mod extends HashMod, Opts>(
           pos = (pos + take) | 0;
         }
         this.saveState();
-        reset(0, 1, 0, outBlockLen, maxOutBlocks);
+        reset(0, 1, maxWritten, outBlockLen, maxOutBlocks);
         return out;
       }
       // old api
@@ -811,10 +837,40 @@ export function mkHash<Mod extends HashMod, Opts>(
         return out as unknown as TRet<HashState>;
       }
     }
-    const hashSync = (msg: TArg<Uint8Array>, opts = {} as MergeOpts<Opts, OutputOpts>) => {
+    const hashSync = (msg: TArg<Uint8Array>, opts?: MergeOpts<Opts, OutputOpts>) => {
       abytes(msg);
+      if (opts === undefined && outputBlocks <= Math.min(chunks, maxOutBlocks)) {
+        const out = new Uint8Array(outputLen);
+        let written = BUFFER.length;
+        try {
+          const blocks =
+            init?.(0, maxBlocks, mod, hash, {} as MergeOpts<Opts, OutputOpts>, true)?.blocks ?? 0;
+          const length = blocks * blockLen + msg.length;
+          if (mod.digest && length <= chunks * blockLen) {
+            BUFFER.set(msg, blocks * blockLen);
+            mod.digest(
+              length,
+              maxBlocks,
+              blockLen,
+              suffix,
+              outputBlocks,
+              maxOutBlocks,
+              outBlockLen
+            );
+          } else {
+            processMessage(msg, blocks);
+            if (outputBlocks) processOutBlocks(0, 1, outputBlocks, maxOutBlocks, outBlockLen, 1);
+          }
+          out.set(digest);
+          written = outputBlocks * outBlockLen;
+          return out;
+        } finally {
+          reset(0, 1, written, outBlockLen, maxOutBlocks);
+        }
+      }
+      if (opts === undefined) opts = {} as MergeOpts<Opts, OutputOpts>;
       const outChecked = checkOutputOpts(opts);
-      const { blocks } = initHash(opts);
+      const { blocks } = initHash(opts, true);
       processMessage(msg, blocks);
       const { out: res, maxWritten } = processOutput(opts, outChecked);
       reset(0, 1, maxWritten, outBlockLen, maxOutBlocks);
@@ -835,7 +891,7 @@ export function mkHash<Mod extends HashMod, Opts>(
         copyFast(STATE, 0, prefix.state, 0, prefix.state.length);
         processMessages(parts, 0, prefix);
       } else {
-        const { blocks } = initHash(opts);
+        const { blocks } = initHash(opts, true);
         processMessages(parts, blocks);
       }
       const { out: res, maxWritten } = processOutput(opts, outChecked);
@@ -847,12 +903,9 @@ export function mkHash<Mod extends HashMod, Opts>(
       const prefix = prefixState(opts);
       if (prefix && chunks.length === 0)
         throw new Error('prefixState requires a non-empty message');
-      // At least 3 blocks (for padding).
-      const maxGroups = Math.floor(BUFFER.length / (blockLen * 3));
-      const maxOutGroups = Math.floor(BUFFER.length / outBlockLen);
       // Validate user input first. Wrong input must throw before touching module state/memory.
       for (let i = 0; i < chunks.length; i += parallelChunks) {
-        const groupLen = Math.min(parallelChunks, chunks.length - i, maxGroups, maxOutGroups);
+        const groupLen = Math.min(parallelChunks, chunks.length - i);
         for (let j = 0; j < groupLen; j++)
           if (!isBytes(chunks[i + j]))
             throw new Error(`expected Uint8Array, got type=${typeof chunks[i + j]}`);
@@ -865,7 +918,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       }
       const outChecked = checkParallelOutput(opts, chunks.length, outputLen, canXOF);
       for (let i = 0; i < chunks.length; i += parallelChunks) {
-        const groupLen = Math.min(parallelChunks, chunks.length - i, maxGroups, maxOutGroups);
+        const groupLen = Math.min(parallelChunks, chunks.length - i);
         const maxBlocks = Math.floor(BUFFER.length / (blockLen * groupLen));
         const maxOutBlocks = Math.floor(BUFFER.length / (outBlockLen * groupLen));
         let blocks = 0;
@@ -874,12 +927,13 @@ export function mkHash<Mod extends HashMod, Opts>(
           for (let j = 0; j < groupLen; j++)
             copyFast(STATE_CHUNKS[j], 0, prefix.state, 0, prefix.state.length);
         } else if (init) {
-          const i = init(0, maxBlocks, mod, hash, opts as any);
+          reset(0, groupLen, 0, outBlockLen, maxOutBlocks);
+          const i = initialize(maxBlocks, opts as any, true);
           if (i && i.blocks !== undefined) blocks = i.blocks;
-          for (let j = 0; j < groupLen; j++) {
-            const t = init(j, maxBlocks, mod, hash, opts as any);
-            if ((t && t.blocks) !== (i && i.blocks))
-              throw new Error('inconsistent init blocks inside parallel group');
+          // Initialization may hash internally; clone its result before processing any lane.
+          for (let j = 1; j < groupLen; j++) {
+            copyFast(STATE_CHUNKS[j], 0, STATE_CHUNKS[0], 0, STATE_CHUNKS[0].length);
+            copyFast(BUFFER, j * maxBlocks * blockLen, BUFFER, 0, blocks * blockLen);
           }
         }
         processMessageParallel(chunks, i, groupLen, blocks, maxBlocks, prefix);
@@ -946,8 +1000,7 @@ export function mkHash<Mod extends HashMod, Opts>(
       if ((setupMode.isAsync || !!opts?.onProgress) && tick(total)) yield;
       return out;
     });
-    hashImpl = (msg, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) =>
-      hashSync(msg, opts as MergeOpts<Opts, OutputOpts>);
+    hashImpl = (msg, opts) => hashSync(msg, opts as MergeOpts<Opts, OutputOpts>);
     hashAsyncImpl = async (msg, opts?: TArg<MergeOpts<Opts, OutputOpts> & AsyncRunOpts>) => {
       const rawOpts = (opts || {}) as MergeOpts<Opts, OutputOpts> & AsyncRunOpts;
       return hashRun.async(msg, rawOpts);
@@ -1017,7 +1070,7 @@ export function mkHash<Mod extends HashMod, Opts>(
     lazyInit();
     return cleanStateImpl(state);
   };
-  const hash = ((msg, opts = {} as TArg<MergeOpts<Opts, OutputOpts>>) =>
+  const hash = ((msg, opts: TArg<MergeOpts<Opts, OutputOpts>> | undefined = undefined) =>
     hashImpl(msg, opts as TArg<MergeOpts<Opts, OutputOpts>>)) as TRet<HashInstance<Opts>>;
   const chunksFn = (parts: TArg<Uint8Array[]>, opts = {} as TArg<Opts & HashBatchOpts>) =>
     chunksImpl(parts, opts);

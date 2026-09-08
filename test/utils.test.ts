@@ -1,5 +1,6 @@
 import { describe, should } from '@paulmillr/jsbt/test.js';
 import { deepStrictEqual as eql, rejects, throws } from 'node:assert';
+import fc from 'fast-check';
 import { hmac } from '../src/hmac.ts';
 import * as u from '../src/utils.ts';
 
@@ -7,6 +8,32 @@ const spoofDataView = () => new (class Uint8Array extends DataView {})(new Array
 const spoofU16 = () => new (class Uint8Array extends Uint16Array {})([0x0102, 0x0304]);
 
 describe('utils', () => {
+  should('copyFast preserves disjoint ranges and surrounding bytes', () => {
+    fc.assert(
+      fc.property(
+        fc.uint8Array({ maxLength: 256 }),
+        fc.nat(),
+        fc.nat(),
+        fc.boolean(),
+        (bytes, a, b, shared) => {
+          const srcPos = a % 3 ? a % (bytes.length + 1) : 0;
+          const len = a % 3 ? b % (bytes.length - srcPos + 1) : bytes.length;
+          const dstPos = b % 9;
+          const source = new Uint8Array(bytes.length * 2 + 32).fill(165);
+          const destination = shared ? source : new Uint8Array(source.length).fill(90);
+          const src = source.subarray(3, 3 + bytes.length);
+          const dst = destination.subarray(bytes.length + 12);
+          src.set(bytes);
+          const expected = destination.slice();
+          expected.set(bytes.subarray(srcPos, srcPos + len), bytes.length + 12 + dstPos);
+          const prior = source.slice();
+          u.copyFast(dst, dstPos, src, srcPos, len);
+          eql([source, destination], [shared ? expected : prior, expected]);
+        }
+      ),
+      { seed: 71487, numRuns: 1000 }
+    );
+  });
   const staticHexVectors = [
     { bytes: Uint8Array.from([]), hex: '' },
     { bytes: Uint8Array.from([0xbe]), hex: 'be' },

@@ -19,6 +19,35 @@ const smallBatch = Array.from({ length: 3 }, (_, i) =>
 for (const name in PLATFORMS) {
   const p = PLATFORMS[name];
   describe(`hash async (${name})`, () => {
+    should('multipart finalizes empty input across hash families', async () => {
+      const empty = new Uint8Array();
+      for (const hash of [
+        p.md5,
+        p.ripemd160,
+        p.sha1,
+        p.sha224,
+        p.sha256,
+        p.sha384,
+        p.sha512,
+        p.blake2s,
+        p.blake2b,
+        p.blake3,
+        p.keccak_256,
+        p.sha3_256,
+        p.shake128,
+      ]) {
+        for (const size of [0, 1, hash.blockLen - 1, hash.blockLen, hash.blockLen + 1]) {
+          const input = Uint8Array.from({ length: size }, (_, i) => i % 251);
+          const expected = hash(input);
+          const parts = [empty, input.subarray(0, 1), empty, input.subarray(1), empty];
+          eql(
+            [hash.chunks(parts), await hash.chunks.async(parts, { asyncTick: 0 })],
+            [expected, expected]
+          );
+          if (!size) eql(hash.chunks([]), expected);
+        }
+      }
+    });
     should('sha256 sync/async parity', async () => {
       const sync = p.sha256(msg);
       const asyncOut = await p.sha256.async(msg, { asyncTick: 0 });
@@ -253,6 +282,174 @@ describe('hash async (webcrypto)', () => {
 });
 
 describe('hash parallel local', () => {
+  const setup = (slots: number, capacity: number, outputLen: number) => {
+    const buffer = new Uint8Array(capacity);
+    const state = new Uint8Array(slots);
+    const states = Array.from({ length: slots }, (_, i) => state.subarray(i, i + 1));
+    const groups: number[] = [];
+    const hash = mkHash(
+      () => ({
+        segments: { buffer, state, state_chunks: states, 'state.state_chunks': states },
+        reset() {
+          buffer.fill(0);
+          state.fill(0);
+        },
+        padding() {
+          return 0;
+        },
+        processBlocks(
+          pos: number,
+          count: number,
+          blocks: number,
+          max: number,
+          block: number,
+          _last: number,
+          left: number
+        ) {
+          for (let lane = pos; lane < pos + count; lane++) {
+            const start = lane * max * block;
+            for (const byte of buffer.subarray(start, start + blocks * block - left))
+              state[lane] += byte;
+            buffer.fill(0, start, start + blocks * block);
+          }
+        },
+        processOutBlocks(pos: number, count: number, blocks: number, max: number, block: number) {
+          groups.push(count);
+          for (let lane = pos; lane < pos + count; lane++)
+            buffer.fill(state[lane], lane * max * block, lane * max * block + blocks * block);
+        },
+      }),
+      { blockLen: 4, outputLen }
+    );
+    return { hash, buffer, state, groups };
+  };
+  for (const [slots, capacity, outputLen, limit] of [
+    [2, 96, 4, 2], // State limited.
+    [4, 24, 4, 2], // Input limited, including padding.
+    [4, 32, 16, 2], // Output limited.
+    [2, 24, 12, 2], // All limits equal.
+    [4, 48, 4, 4], // Input and state limits equal.
+  ]) {
+    should(
+      `mkHash.parallel capacity ${slots}/${capacity}/${outputLen} processes every message`,
+      () => {
+        const { hash, buffer, state, groups } = setup(slots, capacity, outputLen);
+        for (const count of [0, 1, 2, 3, 4, 5, 7, 8, 9]) {
+          for (const len of [0, 1, 4, 5, 17]) {
+            const input = Array.from({ length: count }, (_, lane) =>
+              Uint8Array.from({ length: len }, (_, i) => (lane * 19 + i * 13 + 1) % 251)
+            );
+            const before = input.map((msg) => msg.slice());
+            const expected = input.map((msg) =>
+              new Uint8Array(outputLen).fill(msg.reduce((sum, byte) => sum + byte, 0) & 255)
+            );
+            groups.length = 0;
+            const output = hash.parallel(input);
+            eql(
+              { output, input, buffer, state, groups },
+              {
+                output: expected,
+                input: before,
+                buffer: new Uint8Array(capacity),
+                state: new Uint8Array(slots),
+                groups: Array.from({ length: Math.ceil(count / limit) }, (_, i) =>
+                  Math.min(limit, count - i * limit)
+                ),
+              }
+            );
+          }
+        }
+      }
+    );
+    should(
+      `mkHash.parallel capacity ${slots}/${capacity}/${outputLen} validates every message`,
+      () => {
+        const { hash, buffer, state, groups } = setup(slots, capacity, outputLen);
+        hash.parallel([]);
+        buffer.fill(165);
+        state.fill(165);
+        const before = { buffer: buffer.slice(), state: state.slice(), groups: [] };
+        for (let i = 0; i < 9; i++) {
+          const input = Array.from({ length: 9 }, () => Uint8Array.of(1));
+          input[i] = undefined as any;
+          throws(() => hash.parallel(input), /expected Uint8Array/);
+          eql({ buffer, state, groups }, before);
+        }
+      }
+    );
+  }
+  should('mkHash.parallel capacity must fit at least one state, input and output', () => {
+    for (const [slots, capacity, outputLen] of [
+      [0, 24, 4],
+      [4, 8, 4],
+      [4, 24, 32],
+    ]) {
+      const { hash } = setup(slots, capacity, outputLen);
+      throws(() => hash.parallel([]), /wrong chunks/);
+    }
+  });
+  should('mkHash.parallel copies initialized state and preloaded input once', () => {
+    for (const blocks of [0, 1]) {
+      const buffer = new Uint8Array(64);
+      const state = new Uint8Array(8);
+      const states = [state.subarray(0, 4), state.subarray(4)];
+      const calls: number[] = [];
+      const seen: number[][] = [[], []];
+      const hash = mkHash(
+        () => ({
+          segments: { buffer, state, state_chunks: states, 'state.state_chunks': states },
+          reset() {
+            buffer.fill(0);
+            state.fill(0);
+          },
+          padding() {
+            return 0;
+          },
+          processBlocks(pos: number, count: number, blocks: number, max: number, block: number) {
+            for (let lane = pos; lane < pos + count; lane++) {
+              const start = lane * max * block;
+              seen[lane].push(...buffer.subarray(start, start + blocks * block));
+              buffer.fill(0, start, start + blocks * block);
+            }
+          },
+          processOutBlocks(
+            pos: number,
+            count: number,
+            _blocks: number,
+            max: number,
+            block: number
+          ) {
+            for (let lane = pos; lane < pos + count; lane++)
+              buffer.set(states[lane], lane * max * block);
+          },
+        }),
+        {
+          blockLen: 4,
+          outputLen: 4,
+          init(pos, max, mod) {
+            calls.push(pos);
+            // Models initialization that uses nested hashing in slot zero.
+            mod.segments.state.fill(0);
+            states[pos].set([11, 12, 13, 14]);
+            if (blocks) buffer.set([21, 22, 23, 24], pos * max * 4);
+            return { blocks };
+          },
+        }
+      );
+      const input = [Uint8Array.of(1, 2, 3, 4), Uint8Array.of(5, 6, 7, 8)];
+      const output = hash.parallel(input);
+      eql(
+        { output, seen, calls, buffer, state },
+        {
+          output: [Uint8Array.of(11, 12, 13, 14), Uint8Array.of(11, 12, 13, 14)],
+          seen: input.map((msg) => [...(blocks ? [21, 22, 23, 24] : []), ...msg]),
+          calls: [0],
+          buffer: new Uint8Array(64),
+          state: new Uint8Array(8),
+        }
+      );
+    }
+  });
   should('mkHash.parallel honors outPos across multiple groups', () => {
     const lanes = [
       Uint8Array.of(11, 12, 13, 14),

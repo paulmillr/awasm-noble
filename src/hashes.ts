@@ -373,7 +373,7 @@ export type Blake3Opts = {
   /** Internal flag selecting the derive-key context initialization path. */
   _keyContext?: boolean;
 };
-export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.freeze({
+const base: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.freeze({
   blockLen: 64,
   // BLAKE3's default hash is the 32-byte root chaining value, but XOF output repeats
   // the full 64-byte ROOT compression blocks, so outputBlockLen stays 64 while outputLen is 32.
@@ -381,7 +381,7 @@ export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ O
   outputLen: 32,
   chunks: /* @__PURE__ */ (() => 10 * 1024 * 16)(),
   canXOF: true,
-  init(batchPos, _maxBlocks, mod, hash, opts = {}) {
+  init(batchPos, _maxBlocks, mod, hash, opts = {}, last = false) {
     const { key, context, _keyContext } = opts;
     if (opts.dkLen !== undefined) anumber(opts.dkLen, 'opts.dkLen');
     let flags = 0 >>> 0;
@@ -409,9 +409,29 @@ export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ O
       IV = derive(context as Uint8Array, { dkLen: 32, _keyContext: true });
       flags = constants.B3_Flags.DERIVE_KEY_MATERIAL;
     }
-    mod.segments['state.iv_chunks'][batchPos].set(IV);
-    mod.segments['state.state_chunks'][batchPos].set(IV);
-    u32(mod.segments['state.flags_chunks'][batchPos])[0] = flags;
+    const mode = +(last && flags === 0 && (opts.dkLen === undefined || opts.dkLen === 32));
+    mod.segments['state.flags_chunks'][batchPos][0] = mode;
+    if (!mode) {
+      mod.segments['state.iv_chunks'][batchPos].set(IV);
+      mod.segments['state.state_chunks'][batchPos].set(IV);
+    }
+    if (!mode) u32(mod.segments['state.flags_chunks'][batchPos])[0] = flags;
+  },
+});
+export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.freeze({
+  ...base,
+  init(pos, max, mod, hash, opts = {}, last = false) {
+    if (
+      last &&
+      opts.key === undefined &&
+      opts.context === undefined &&
+      opts._keyContext === undefined &&
+      (opts.dkLen === undefined || opts.dkLen === 32)
+    ) {
+      mod.segments['state.flags_chunks'][pos][0] = 1;
+      return;
+    }
+    return base.init!(pos, max, mod, hash, opts, last);
   },
 });
 

@@ -735,7 +735,8 @@ export function copyFast(
   len: number
 ): void {
   if (len <= 0) return;
-  if (len <= 64) for (let i = 0; i < len; i++) dst[dstPos + i] = src[srcPos + i];
+  if (srcPos === 0 && len === src.length) dst.set(src, dstPos);
+  else if (len <= 64) for (let i = 0; i < len; i++) dst[dstPos + i] = src[srcPos + i];
   else dst.set(src.subarray(srcPos, srcPos + len), dstPos);
 }
 

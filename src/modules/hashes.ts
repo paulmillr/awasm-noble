@@ -955,6 +955,110 @@ export function genBlake3(_type: TypeName, _opts = {}) {
     // If everything is parallel and there is 1 block per parallel message,
     // each block produces 1 stack entry.
     .mem('stackBuffer', array('u32', {}, CHUNKS, 8)) // up to 16 stack elm per 1kb of buffer
+    .fn(
+      'compress',
+      ['u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (f, pos, len, counter, high, base, out) => {
+        // Default chunk/parent compression, with the CV in locals and only eight output words.
+        const { u32: T } = f.types;
+        const iv = Array.from(IV, (v) => T.const(v));
+        const blocks = T.max(T.const(1), T.shr(T.add(len, T.const(blockLen - 1)), 6));
+        const { PARENT, ROOT, CHUNK_START, CHUNK_END } = constants.B3_Flags;
+        const mask = T.select(T.and(base, T.const(PARENT)), T.const(0), T.const(0xffffffff));
+        const [cv] = f.doN1([iv], blocks, (i, cv) => {
+          const last = T.eq(i, T.sub(blocks, T.const(1)));
+          const flags = T.or(
+            T.and(base, T.const(~ROOT >>> 0)),
+            T.select(last, T.and(base, T.const(ROOT)), T.const(0)),
+            T.and(
+              mask,
+              T.or(
+                T.select(T.eqz(i), T.const(CHUNK_START), T.const(0)),
+                T.select(last, T.const(CHUNK_END), T.const(0))
+              )
+            )
+          );
+          const used = T.select(last, T.sub(len, T.shl(i, 6)), T.const(blockLen));
+          const V = blakeFn(
+            T,
+            rounds,
+            shifts,
+            sigma,
+            [...cv, ...iv.slice(0, 4), counter, high, used, flags],
+            f.memory.buffer.reshape(CHUNKS, 16)[T.add(pos, i)].get()
+          );
+          return [V.slice(0, 8).map((v, j) => T.xor(v, V[8 + j]))];
+        });
+        f.memory.buffer.reshape(CHUNKS * 2, 8)[out].set(cv);
+      }
+    )
+    .fn('single', ['u32'], 'void', (f, len) => {
+      const { u32: T } = f.types;
+      const { ROOT, PARENT, CHUNK_START, CHUNK_END } = constants.B3_Flags;
+      const zero = T.const(0);
+      f.ifElse(
+        T.eqz(len),
+        [],
+        () => {
+          // All inputs are known here: constant folding reduces the empty hash to digest stores.
+          const iv = Array.from(IV, (v) => T.const(v));
+          const V = blakeFn(
+            T,
+            rounds,
+            shifts,
+            sigma,
+            [...iv, ...iv.slice(0, 4), zero, zero, zero, T.const(CHUNK_START | CHUNK_END | ROOT)],
+            Array(16).fill(zero)
+          );
+          f.memory.buffer
+            .reshape(CHUNKS * 2, 8)[0]
+            .set(V.slice(0, 8).map((v, i) => T.xor(v, V[8 + i])));
+        },
+        () => {
+          if (f.flags.nativeSIMD) {
+            f.functions.compress.call(zero, len, zero, zero, T.const(ROOT), zero);
+            return;
+          }
+          const count = T.max(T.const(1), T.shr(T.add(len, T.const(1023)), 10));
+          const base = T.select(T.eq(count, T.const(1)), T.const(ROOT), zero);
+          f.doN1([], count, (i) => {
+            f.functions.compress.call(
+              T.shl(i, 4),
+              T.min(T.const(1024), T.sub(len, T.shl(i, 10))),
+              i,
+              zero,
+              base,
+              i
+            );
+            return [];
+          });
+          // Compact CVs into consumed input. Each layer pairs adjacent children
+          // and carries its odd tail.
+          f.forLoop(
+            [count],
+            (n) => T.gt(n, T.const(1)),
+            (n) => [T.shr(T.add(n, T.const(1)), 1)],
+            (n) => {
+              const pairs = T.shr(n, 1);
+              const flags = T.or(
+                T.const(PARENT),
+                T.select(T.eq(n, T.const(2)), T.const(ROOT), zero)
+              );
+              f.doN1([], pairs, (i) => {
+                f.functions.compress.call(i, T.const(blockLen), zero, zero, flags, i);
+                return [];
+              });
+              f.ifElse(T.and(n, T.const(1)), [], () => {
+                const buffer = f.memory.buffer.reshape(CHUNKS * 2, 8);
+                buffer[pairs].set(buffer[T.sub(n, T.const(1))].get());
+              });
+              return [n];
+            }
+          );
+        }
+      );
+    })
     .fn('compressParents', ['u32', 'u32', 'u32'], 'void', (f, batchPos, stackPos, stackPosOut) => {
       const { u32 } = f.types;
       const { iv, stack, flags } = f.memory.state[batchPos];
@@ -1188,7 +1292,7 @@ export function genBlake3(_type: TypeName, _opts = {}) {
       }
     )
     .fn(
-      'processBlocks',
+      'update',
       ['u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
       'void',
       (f, batchPos, batchLen, blocks, maxBlocks, blockLen, isLast, left, _padBlocks) => {
@@ -1203,6 +1307,17 @@ export function genBlake3(_type: TypeName, _opts = {}) {
           for leftovers / the last non-full chunk.
         */
         const { u32 } = f.types;
+        f.doN([], batchLen, (i) => {
+          const state = f.memory.state[u32.add(batchPos, i)];
+          // Base flags are 0/16/32/64; 1 marks an untouched default initialization.
+          f.ifElse(u32.eq(state.flags.get(), u32.const(1)), [], () => {
+            state.flags.set(u32.const(0));
+            const iv = Array.from(IV, (v) => u32.const(v));
+            state.iv.set(iv);
+            state.state.set(iv);
+          });
+          return [];
+        });
         const inBlocks = blocks;
         // Should be same for all batch elements
         const curPos = f.memory.state[batchPos].chunkPos.get();
@@ -1225,7 +1340,7 @@ export function genBlake3(_type: TypeName, _opts = {}) {
           [],
           () => {
             f.doN([], batchLen, (cnt) => {
-              f.functions.processBlocks.call(
+              f.functions.update.call(
                 u32.add(batchPos, cnt),
                 u32.const(1),
                 inBlocks,
@@ -1364,7 +1479,7 @@ export function genBlake3(_type: TypeName, _opts = {}) {
       }
     )
     .batchFn(
-      'processOutBlocks',
+      'squeeze',
       { lanes: getLanes(type), perThread: MIN_PER_THREAD },
       ['u32', 'u32', 'u32'],
       (f, lanes, batchPos, perBatch, maxBlocks, outBlockLen, _isLast) => {
@@ -1428,25 +1543,38 @@ export function genBlake3(_type: TypeName, _opts = {}) {
     .fn(
       'padding',
       ['u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
-      'u32',
+      ['u32'],
       (f, batchPos, take, maxBlocks, left, blockLen, _suffix) => {
         const { u32 } = f.types;
         const buffer = f.memory.buffer.reshape(batchPos, maxBlocks, 16)[batchPos];
         const isEmpty = u32.eqz(take);
-        buffer
-          .as8()
-          .range(take, u32.select(isEmpty, blockLen, left))
-          .zero();
-        return u32.const(0);
+        f.ifElse(u32.or(isEmpty, left), [], () => {
+          buffer
+            .as8()
+            .range(take, u32.select(isEmpty, blockLen, left))
+            .zero();
+        });
+        return [u32.const(0)];
       }
     )
     .fn(
-      'reset',
+      'clear',
       ['u32', 'u32', 'u32', 'u32', 'u32'],
       'void',
       (f, batchPos, batchLen, maxWritten, _blockLen, maxBlocks) => {
         f.memory.state.range(batchPos, batchLen).as8().zero();
         const { u32 } = f.types;
+        f.memory.stackBuffer
+          .as8()
+          .range(
+            0,
+            u32.select(
+              batchLen,
+              u32.shl(u32.shr(u32.add(maxWritten, u32.const(1023)), 10), 5),
+              u32.const(0)
+            )
+          )
+          .zero();
         f.doN([], batchLen, (cnt) => {
           f.memory.buffer
             .reshape(batchPos, maxBlocks, 16)
@@ -1454,6 +1582,105 @@ export function genBlake3(_type: TypeName, _opts = {}) {
             .range(0, maxWritten)
             .fill(0);
           return [];
+        });
+      }
+    )
+    .fn(
+      'processBlocks',
+      ['u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (f, pos, count, blocks, max, blockLen, last, left, pad) => {
+        const T = f.types.u32,
+          one = T.const(1);
+        const state = f.memory.state[pos],
+          len = T.sub(T.mul(blocks, blockLen), left);
+        const eligible = T.and(
+          T.eqz(pos),
+          T.eq(count, one),
+          T.eq(state.flags.get(), one),
+          last,
+          f.flags.nativeSIMD ? T.le(len, T.const(1024)) : one
+        );
+        f.ifElse(
+          eligible,
+          [],
+          () => {
+            state.flags.set(T.add(one, T.max(T.const(64), T.mul(blocks, blockLen))));
+            f.functions.single.call(len);
+          },
+          () => {
+            f.functions.update.call(pos, count, blocks, max, blockLen, last, left, pad);
+          }
+        );
+      }
+    )
+    .fn(
+      'processOutBlocks',
+      ['u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (f, pos, count, ...args) => {
+        const T = f.types.u32;
+        // A completed direct call stores its padded input span plus one (at least 65).
+        f.ifElse(
+          T.and(T.eq(count, T.const(1)), T.gt(f.memory.state[pos].flags.get(), T.const(64))),
+          [],
+          () => {},
+          () => {
+            f.functions.squeeze.call(pos, count, ...args);
+          }
+        );
+      }
+    )
+    .fn(
+      'reset',
+      ['u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (f, pos, count, written, blockLen, max) => {
+        const T = f.types.u32,
+          one = T.const(1),
+          flags = f.memory.state[pos].flags.get();
+        const known = T.and(
+          T.eq(count, one),
+          T.and(flags, one),
+          T.le(flags, T.add(one, T.mul(max, blockLen)))
+        );
+        f.ifElse(
+          known,
+          [],
+          () => {
+            const span = T.max(written, T.sub(flags, one));
+            f.memory.buffer.reshape(pos, max, 16)[pos].as8().range(0, span).zero();
+            f.memory.state[pos].flags.set(T.const(0));
+          },
+          () => {
+            f.functions.clear.call(pos, count, written, blockLen, max);
+          }
+        );
+      }
+    )
+    .fn(
+      'digest',
+      ['u32', 'u32', 'u32', 'u32', 'u32', 'u32', 'u32'],
+      'void',
+      (f, length, maxBlocks, blockLen, suffix, outBlocks, maxOutBlocks, outBlockLen) => {
+        const T = f.types.u32;
+        const zero = T.const(0);
+        const one = T.const(1);
+        const blocks = T.div(T.add(length, T.sub(blockLen, one)), blockLen);
+        const left = T.sub(T.mul(blocks, blockLen), length);
+        const [pad] = f.functions.padding.call(zero, length, maxBlocks, left, blockLen, suffix);
+        f.functions.processBlocks.call(
+          zero,
+          one,
+          T.add(blocks, pad),
+          maxBlocks,
+          blockLen,
+          one,
+          left,
+          pad
+        );
+        f.ifElse(T.ne(outBlocks, zero), [], () => {
+          f.functions.processOutBlocks.call(zero, one, outBlocks, maxOutBlocks, outBlockLen, one);
         });
       }
     );
