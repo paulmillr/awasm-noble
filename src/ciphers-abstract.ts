@@ -225,6 +225,8 @@ export const mkCipher = <Mod extends CipherMod>(
     key: TArg<Uint8Array>,
     args: unknown[]
   ): TRet<Uint8Array> => {
+    // Borrowed key/nonce views may change after the factory validates them.
+    if (def.validate) def.validate(key, ...args);
     if (dir === 'encrypt' && def.lengthLimitEnc) def.lengthLimitEnc(data.length, args);
     if (dir === 'decrypt' && def.lengthLimitDec) def.lengthLimitDec(data.length, args);
     let overlapCopy: Uint8Array | undefined;
@@ -803,6 +805,7 @@ export const mkCipher = <Mod extends CipherMod>(
     private disablePadding: boolean;
     private offsetUsed: boolean;
     constructor(dir: Dir, key: Uint8Array, args: unknown[], from?: StreamCipher) {
+      if (!from && def.validate) def.validate(key, ...args);
       this.dir = dir;
       this.key = key;
       this.args = args;

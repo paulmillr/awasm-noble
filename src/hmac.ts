@@ -51,8 +51,7 @@ class HMAC<T extends HashStream<any>> {
     ahash(hash);
     abytes(key, undefined, 'key');
     this.iHash = hash.create() as T;
-    if (typeof this.iHash.update !== 'function')
-      throw new Error('Expected instance of class which extends utils.Hash');
+    if (typeof this.iHash.update !== 'function') throw new Error('expected Hash instance');
     this.blockLen = this.iHash.blockLen;
     this.outputLen = this.iHash.outputLen;
     const blockLen = this.blockLen;

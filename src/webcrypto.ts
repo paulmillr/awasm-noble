@@ -35,6 +35,7 @@ import {
   anumber,
   checkOpts,
   clean,
+  copyBytes,
   kdfInputToBytes,
   type Asyncify,
   type KDFInput,
@@ -143,51 +144,7 @@ const probeCipher = (algo: BlockMode, keyLens: number[], nonceLen: number) =>
     }
   });
 
-const toKdfInput = (data: TArg<KDFInput>, label: string) => {
-  const buf = kdfInputToBytes(data, label);
-  // Track ownership so UTF-8 temporaries can be wiped without clearing caller-owned byte arrays.
-  return { buf, borrowed: typeof data !== 'string' };
-};
 const ZERO = /* @__PURE__ */ Uint8Array.of();
-
-// RFC 5869 absent salt is HashLen zeros; HMAC pads empty and all-zero short keys identically.
-const hkdfSalt = (salt: TArg<Uint8Array | undefined>) => salt || ZERO;
-// RFC 5869 permits omitted info as the zero-length context string.
-const hkdfInfo = (info: TArg<Uint8Array | undefined>) => info || ZERO;
-
-const keepIfBorrowed = (buf: TArg<Uint8Array>, borrowed: boolean) => {
-  if (!borrowed) clean(buf);
-};
-const restoreKdf = (...items: TArg<Array<{ buf: Uint8Array; borrowed: boolean }>>) => {
-  for (const i of items) keepIfBorrowed(i.buf, i.borrowed);
-};
-
-const hkdfDerive = async (
-  webHash: string,
-  ikm: TArg<Uint8Array>,
-  salt: TArg<Uint8Array | undefined>,
-  info: TArg<Uint8Array | undefined>,
-  length: number
-): Promise<TRet<Uint8Array>> => {
-  const wkey = await subtle().importKey('raw', ikm as BufferSource, 'HKDF', false, ['deriveBits']);
-  const opts = { name: 'HKDF', hash: webHash, salt: hkdfSalt(salt), info: hkdfInfo(info) };
-  // RFC 5869 caps L at 255*HashLen; rely on WebCrypto deriveBits() to enforce it.
-  return new Uint8Array(await subtle().deriveBits(opts, wkey, 8 * length)) as TRet<Uint8Array>;
-};
-const pbkdf2Derive = async (
-  webHash: string,
-  password: TArg<Uint8Array>,
-  salt: TArg<Uint8Array>,
-  c: number,
-  dkLen: number
-): Promise<TRet<Uint8Array>> => {
-  const key = await subtle().importKey('raw', password as BufferSource, 'PBKDF2', false, [
-    'deriveBits',
-  ]);
-  const deriveOpts = { name: 'PBKDF2', salt, iterations: c, hash: webHash };
-  // RFC 8018 derives dkLen octets; WebCrypto deriveBits() takes bits and rejects invalid c.
-  return new Uint8Array(await subtle().deriveBits(deriveOpts, key, 8 * dkLen)) as TRet<Uint8Array>;
-};
 const webHashNames = new WeakMap<object, string>();
 const webHashNamesByDef = new Map<object, string>([
   [def_sha1 as object, 'SHA-1'],
@@ -356,16 +313,20 @@ export const hmac: TRet<{
     const webHash = getWebHashName(hash);
     abytes(key, undefined, 'key');
     abytes(message, undefined, 'message');
-    const wkey = await subtle().importKey(
-      'raw',
-      key as BufferSource,
-      { name: 'HMAC', hash: webHash },
-      false,
-      ['sign']
-    );
-    return new Uint8Array(
-      await subtle().sign('HMAC', wkey, message as BufferSource)
-    ) as TRet<Uint8Array>;
+    const backend = subtle();
+    const copy = copyBytes(message);
+    try {
+      const wkey = await backend.importKey(
+        'raw',
+        key as BufferSource,
+        { name: 'HMAC', hash: webHash },
+        false,
+        ['sign']
+      );
+      return new Uint8Array(await backend.sign('HMAC', wkey, copy)) as TRet<Uint8Array>;
+    } finally {
+      clean(copy);
+    }
   }) as typeof hmac;
   fn.create = (_hash: TArg<HashInstance<any>>, _key: TArg<Uint8Array>) => {
     throw new Error('streaming is not supported');
@@ -399,9 +360,23 @@ export const hkdf = async (
   const webHash = getWebHashName(hash);
   abytes(ikm, undefined, 'ikm');
   anumber(length, 'length');
+  if (length > 255 * hash.outputLen) throw new Error('Length must be <= 255*HashLen');
   if (salt !== undefined) abytes(salt, undefined, 'salt');
   if (info !== undefined) abytes(info, undefined, 'info');
-  return hkdfDerive(webHash, ikm, salt, info, length);
+  const backend = subtle();
+  const copies = [copyBytes(salt || ZERO), copyBytes(info || ZERO)];
+  try {
+    const key = await backend.importKey('raw', ikm as BufferSource, 'HKDF', false, ['deriveBits']);
+    const params = { name: 'HKDF', hash: webHash, salt: copies[0], info: copies[1] };
+    const out = new Uint8Array(await backend.deriveBits(params, key, 8 * length));
+    if (out.length !== length) {
+      clean(out);
+      throw new Error('WebCrypto returned an invalid derived key length');
+    }
+    return out as TRet<Uint8Array>;
+  } finally {
+    clean(...copies);
+  }
 };
 
 const pbkdf2Async = async (
@@ -415,14 +390,33 @@ const pbkdf2Async = async (
   const { c, dkLen } = _opts;
   anumber(c, 'c');
   anumber(dkLen, 'dkLen');
+  // Native PBKDF2 bindings may abort on iteration counts beyond their signed 32-bit limit.
+  if (c > 0x7fffffff) throw new Error('"c" exceeds WebCrypto backend limit');
   // RFC 8018 §5.2 defines dkLen as a positive integer.
   if (dkLen < 1) throw new Error('"dkLen" must be >= 1');
-  const _password = toKdfInput(password, 'password');
-  const _salt = toKdfInput(salt, 'salt');
+  // deriveBits takes an unsigned 32-bit bit count; larger byte lengths wrap to zero.
+  if (dkLen >= 2 ** 29) throw new Error('derived key too long');
+  const backend = subtle();
+  const _password = kdfInputToBytes(password, 'password');
   try {
-    return await pbkdf2Derive(webHash, _password.buf, _salt.buf, c, dkLen);
+    const bytes = kdfInputToBytes(salt, 'salt');
+    const _salt = typeof salt === 'string' ? bytes : copyBytes(bytes);
+    try {
+      const key = await backend.importKey('raw', _password as BufferSource, 'PBKDF2', false, [
+        'deriveBits',
+      ]);
+      const params = { name: 'PBKDF2', salt: _salt, iterations: c, hash: webHash };
+      const out = new Uint8Array(await backend.deriveBits(params, key, 8 * dkLen));
+      if (out.length !== dkLen) {
+        clean(out);
+        throw new Error('WebCrypto returned an invalid derived key length');
+      }
+      return out as TRet<Uint8Array>;
+    } finally {
+      clean(_salt);
+    }
   } finally {
-    restoreKdf(_password, _salt);
+    if (typeof password === 'string') clean(_password);
   }
 };
 type WebPbkdf2 = (hash: TArg<HashInstance<any>>) => {
@@ -453,30 +447,43 @@ export const pbkdf2: TRet<WebPbkdf2> = ((hash: TArg<HashInstance<any>>) => {
   return fn;
 }) as WebPbkdf2;
 
+const crypt = async (
+  direction: 'encrypt' | 'decrypt',
+  key: TArg<Uint8Array>,
+  keyParams: any,
+  cryptParams: any,
+  data: TArg<Uint8Array>
+): Promise<TRet<Uint8Array>> => {
+  const backend = subtle();
+  const params = { ...cryptParams };
+  const copies = [copyBytes(key)];
+  try {
+    // Key import yields; snapshot operation parameters before callers can mutate them.
+    for (const name of ['iv', 'counter', 'additionalData']) {
+      if (params[name] === undefined) continue;
+      params[name] = copyBytes(params[name]);
+      copies.push(params[name]);
+    }
+    const imported = await backend.importKey('raw', copies[0], keyParams, true, [direction]);
+    return new Uint8Array(await backend[direction](params, imported, data)) as TRet<Uint8Array>;
+  } finally {
+    clean(...copies);
+  }
+};
 /** Internal WebCrypto AES hooks; properties stay mutable so runtimes can replace encrypt/decrypt. */
 export const utils = {
-  encrypt: async (
+  encrypt: (
     key: TArg<Uint8Array>,
     keyParams: any,
     cryptParams: any,
     plaintext: TArg<Uint8Array>
-  ): Promise<TRet<Uint8Array>> => {
-    const iKey = await subtle().importKey('raw', key as BufferSource, keyParams, true, ['encrypt']);
-    return new Uint8Array(
-      await subtle().encrypt(cryptParams, iKey, plaintext as BufferSource)
-    ) as TRet<Uint8Array>;
-  },
-  decrypt: async (
+  ): Promise<TRet<Uint8Array>> => crypt('encrypt', key, keyParams, cryptParams, plaintext),
+  decrypt: (
     key: TArg<Uint8Array>,
     keyParams: any,
     cryptParams: any,
     ciphertext: TArg<Uint8Array>
-  ): Promise<TRet<Uint8Array>> => {
-    const iKey = await subtle().importKey('raw', key as BufferSource, keyParams, true, ['decrypt']);
-    return new Uint8Array(
-      await subtle().decrypt(cryptParams, iKey, ciphertext as BufferSource)
-    ) as TRet<Uint8Array>;
-  },
+  ): Promise<TRet<Uint8Array>> => crypt('decrypt', key, keyParams, cryptParams, ciphertext),
 };
 
 const gen = (algo: BlockMode, nonceLength: number, def: any): TRet<WebCipher> =>

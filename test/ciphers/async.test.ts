@@ -13,6 +13,85 @@ const aad = new Uint8Array(33).fill(17);
 for (const name in PLATFORMS) {
   const p = PLATFORMS[name];
   describe(`cipher async (${name})`, () => {
+    should('borrowed inputs are revalidated before use', async () => {
+      const data = new Uint8Array(16);
+      for (const algorithm of ['ecb', 'cbc', 'ctr', 'chacha20']) {
+        const factory = p[algorithm];
+        const args = factory.nonceLength ? [new Uint8Array(factory.nonceLength)] : [];
+        for (const detach of [false, true]) {
+          for (const mode of ['encrypt', 'decrypt', 'stream', 'async']) {
+            const length = algorithm === 'chacha20' ? 32 : 16;
+            const buffer = new ArrayBuffer(length, { maxByteLength: length });
+            const key = new Uint8Array(buffer);
+            const cipher = factory(key, ...args);
+            if (detach) structuredClone(buffer, { transfer: [buffer] });
+            else buffer.resize(length - 1);
+            await rejects(async () => {
+              if (mode === 'stream') cipher.encrypt.create().destroy();
+              else if (mode === 'async') await cipher.encrypt.async(data);
+              else cipher[mode](data);
+            }, /key/);
+            deepStrictEqual(data, new Uint8Array(16));
+          }
+        }
+      }
+    });
+    should('ciphers preserve output with overlapping input', () => {
+      for (const algorithm of [
+        'chacha8',
+        'chacha12',
+        'chacha20',
+        'chacha20orig',
+        'xchacha20',
+        'salsa20',
+        'xsalsa20',
+        'cbc',
+        'ctr',
+        'ecb',
+      ]) {
+        const factory = p[algorithm];
+        const block = factory.blockLen;
+        const keys = ['cbc', 'ctr', 'ecb'].includes(algorithm) ? [16, 24, 32] : [32];
+        const args = factory.nonceLength ? [new Uint8Array(factory.nonceLength)] : [];
+        for (const size of keys) {
+          const key = new Uint8Array(size);
+          for (const len of [0, 1, block - 1, block, block + 1, 2 * block]) {
+            const data = Uint8Array.from({ length: len }, (_, i) => i);
+            const encrypted = factory(key, ...args).encrypt(data);
+            for (const direction of ['encrypt', 'decrypt']) {
+              const message = direction === 'encrypt' ? data : encrypted;
+              const expected = direction === 'encrypt' ? encrypted : data;
+              const length = Math.max(message.length, expected.length);
+              for (const shift of [-length, -block + 1, -4, -1, 0, 1, 4, block - 1, length]) {
+                const start = 4 + Math.max(0, -shift);
+                const end = 4 + Math.max(0, shift);
+                const buffer = new Uint8Array(8 + length + Math.abs(shift));
+                const input = buffer.subarray(start, start + message.length);
+                const output = buffer.subarray(end, end + length);
+                for (const fill of [0, 0xa5]) {
+                  buffer.fill(fill);
+                  input.set(message);
+                  const untouched = buffer.slice();
+                  const result = factory(key, ...args)[direction](input, output);
+                  strictEqual(result.buffer, buffer.buffer);
+                  strictEqual(result.byteOffset, output.byteOffset);
+                  deepStrictEqual(
+                    [result, output.subarray(0, expected.length)],
+                    [expected, expected]
+                  );
+                  // Padding may use the output suffix as scratch.
+                  // Nothing outside output may change.
+                  untouched.fill(0, end, end + length);
+                  const actual = buffer.slice();
+                  actual.fill(0, end, end + length);
+                  deepStrictEqual(actual, untouched);
+                }
+              }
+            }
+          }
+        }
+      }
+    });
     should('ctr sync/async parity', async () => {
       const sync = p.ctr(key256, nonce16).encrypt(msg);
       const asyncOut = await p.ctr(key256, nonce16).encrypt.async(msg, undefined, { asyncTick: 0 });

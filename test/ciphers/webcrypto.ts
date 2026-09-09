@@ -43,7 +43,84 @@ describe('webcrypto ciphers', () => {
     const c = web.ctr(key, nonce);
     await c.encrypt.async(msg);
     await rejects(() => c.encrypt.async(msg));
+    const iv = nonce.subarray(0, 12);
+    const gcm = web.gcm(key, iv);
+    const encrypted = await gcm.encrypt.async(msg);
+    await rejects(() => gcm.encrypt.async(msg), /encrypt/);
+    const bad = encrypted.slice();
+    bad[bad.length - 1] ^= 1;
+    await rejects(() => web.gcm(key, iv).decrypt.async(bad));
+    eql(await web.gcm(key, iv).decrypt.async(encrypted), msg);
   });
+
+  should.serial(
+    'snapshots operation parameters and wipes copies after success or failure',
+    async () => {
+      const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+      try {
+        for (const direction of ['encrypt', 'decrypt']) {
+          for (const fail of [false, true]) {
+            const key = new Uint8Array(16).fill(1);
+            const nonce = new Uint8Array(12).fill(2);
+            const aad = new Uint8Array(3).fill(3);
+            const data = new Uint8Array(17).fill(4);
+            const expected = {
+              key: key.slice(),
+              params: { name: 'AES-GCM', iv: nonce.slice(), additionalData: aad.slice() },
+              data: new Uint8Array(17).fill(5),
+            };
+            const copies: Uint8Array[] = [];
+            const calls: unknown[] = [];
+            let resume!: () => void;
+            const gate = new Promise<void>((resolve) => (resume = resolve));
+            const subtle = {
+              async importKey(_format, input) {
+                copies.push(input);
+                const saved = input.slice();
+                await gate;
+                return saved;
+              },
+              async [direction](params, key, data) {
+                copies.push(params.iv, params.additionalData);
+                calls.push({
+                  key,
+                  params: {
+                    ...params,
+                    iv: params.iv.slice(),
+                    additionalData: params.additionalData.slice(),
+                  },
+                  data: data.slice(),
+                });
+                if (fail) throw new Error('backend failure');
+                return data.slice().buffer;
+              },
+            };
+            Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { subtle } });
+            const result = web.gcm(key, nonce, aad)[direction].async(data);
+            key.fill(6);
+            nonce.fill(7);
+            aad.fill(8);
+            data.fill(5);
+            resume();
+            if (fail) await rejects(() => result, /backend failure/);
+            else eql(await result, expected.data);
+            eql(calls, [expected]);
+            eql(
+              copies,
+              copies.map((copy) => new Uint8Array(copy.length))
+            );
+            eql(
+              [key, nonce, aad],
+              [new Uint8Array(16).fill(6), new Uint8Array(12).fill(7), new Uint8Array(3).fill(8)]
+            );
+          }
+        }
+      } finally {
+        if (original) Object.defineProperty(globalThis, 'crypto', original);
+        else delete (globalThis as any).crypto;
+      }
+    }
+  );
 
   should('gcm rejects falsy non-byte AAD with TypeError', () => {
     const key = new Uint8Array(32).fill(7);

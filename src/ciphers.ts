@@ -446,6 +446,7 @@ export const gcmsiv: TRet<CipherDef<TYPES.AES_GCMSIV>> = /* @__PURE__ */ (() => 
     blockLen: 16,
     nonceLength: 12,
     tagLength: 16,
+    tagError: 'invalid polyval tag',
     withAAD: true,
     varSizeNonce: true,
     noOutput: true,

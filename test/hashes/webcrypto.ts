@@ -27,8 +27,74 @@ const P1 = new Uint8Array([1, 2, 3, 4]);
 const P2 = new Uint8Array([5, 6, 7, 8]);
 
 describe('webcrypto hashes', () => {
+  should.serial('rejects PBKDF2 iteration overflow before entering WebCrypto', async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const subtle = {
+      importKey() {
+        throw new Error('backend called');
+      },
+    };
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { subtle } });
+    try {
+      for (const c of [2 ** 31, 2 ** 32])
+        await rejects(() => webcrypto.pbkdf2(webcrypto.sha256).async(BUF1, BUF2, { c }), {
+          message: '"c" exceeds WebCrypto backend limit',
+        });
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'crypto', original);
+      else delete (globalThis as any).crypto;
+    }
+  });
+  should.serial('wipes owned UTF-8 inputs after success and validation failure', async () => {
+    const expected = pbkdf2(wasm.sha256)('password', 'salt', { c: 1 });
+    const encode = TextEncoder.prototype.encode;
+    const copies: Uint8Array[] = [];
+    TextEncoder.prototype.encode = function (text) {
+      const out = encode.call(this, text);
+      copies.push(out);
+      return out;
+    };
+    try {
+      eql(await webcrypto.pbkdf2(webcrypto.sha256).async('password', 'salt', { c: 1 }), expected);
+      await rejects(() =>
+        webcrypto.pbkdf2(webcrypto.sha256).async('password', null as any, { c: 1 })
+      );
+      eql(copies, [new Uint8Array(8), new Uint8Array(4), new Uint8Array(8)]);
+    } finally {
+      TextEncoder.prototype.encode = encode;
+    }
+  });
   for (const [name, { noble, web }] of Object.entries(HASHES)) {
     describe(name, () => {
+      should.serial('digest lengths ignore inherited options', async () => {
+        const digest = noble(BUF1);
+        const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'dkLen');
+        Object.defineProperty(Object.prototype, 'dkLen', {
+          configurable: true,
+          writable: true,
+          value: 0,
+        });
+        try {
+          for (const [opts, expected] of [
+            [undefined, digest],
+            [{}, digest],
+            [{ dkLen: undefined }, digest],
+            [{ dkLen: 0 }, new Uint8Array()],
+            [{ dkLen: 3 }, digest.subarray(0, 3)],
+          ] as const)
+            eql(
+              [
+                await web.async(BUF1, opts),
+                await web.chunks.async([BUF1], opts),
+                await web.parallel.async([BUF1, BUF1], opts),
+              ],
+              [expected, expected, [expected, expected]]
+            );
+        } finally {
+          if (previous) Object.defineProperty(Object.prototype, 'dkLen', previous);
+          else delete (Object.prototype as { dkLen?: number }).dkLen;
+        }
+      });
       should('basic async', async () => {
         eql(await web.async(BUF1), noble(BUF1));
         eql(web.blockLen, noble.blockLen);

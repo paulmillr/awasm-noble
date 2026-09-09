@@ -571,7 +571,12 @@ declare const TextDecoder: any;
  */
 export function utf8ToBytes(str: string): TRet<Uint8Array> {
   if (typeof str !== 'string') throw new TypeError('string expected');
-  return new Uint8Array(new TextEncoder().encode(str)) as TRet<Uint8Array>; // https://bugzil.la/1681809
+  const encoded = new TextEncoder().encode(str);
+  try {
+    return new Uint8Array(encoded) as TRet<Uint8Array>; // https://bugzil.la/1681809
+  } finally {
+    clean(encoded);
+  }
 }
 
 /**

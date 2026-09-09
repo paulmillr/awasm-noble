@@ -299,8 +299,9 @@ function blake2Init(
   mod: TArg<TYPES.BLAKE2S>,
   opts: TArg<Blake2Opts>
 ) {
-  if (opts.dkLen !== undefined) anumber(opts.dkLen, 'opts.dkLen');
-  const dkLen = opts.dkLen === undefined ? outputLen : opts.dkLen;
+  const length = Object.hasOwn(opts, 'dkLen') ? opts.dkLen : undefined;
+  if (length !== undefined) anumber(length, 'opts.dkLen');
+  const dkLen = length === undefined ? outputLen : length;
   let keyLength = 0;
   let blocks = 0;
   // RFC 7693 uses digest length nn in 1..outputLen, so zero-length output is invalid here.
@@ -383,7 +384,8 @@ const base: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.fre
   canXOF: true,
   init(batchPos, _maxBlocks, mod, hash, opts = {}, last = false) {
     const { key, context, _keyContext } = opts;
-    if (opts.dkLen !== undefined) anumber(opts.dkLen, 'opts.dkLen');
+    const length = Object.hasOwn(opts, 'dkLen') ? opts.dkLen : undefined;
+    if (length !== undefined) anumber(length, 'opts.dkLen');
     let flags = 0 >>> 0;
     let IV: Uint8Array = constants.B3_IV_U8;
     if (key !== undefined) {
@@ -409,7 +411,7 @@ const base: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ Object.fre
       IV = derive(context as Uint8Array, { dkLen: 32, _keyContext: true });
       flags = constants.B3_Flags.DERIVE_KEY_MATERIAL;
     }
-    const mode = +(last && flags === 0 && (opts.dkLen === undefined || opts.dkLen === 32));
+    const mode = +(last && flags === 0 && (length === undefined || length === 32));
     mod.segments['state.flags_chunks'][batchPos][0] = mode;
     if (!mode) {
       mod.segments['state.iv_chunks'][batchPos].set(IV);
@@ -426,7 +428,7 @@ export const blake3: TRet<HashDef<TYPES.BLAKE3, Blake3Opts>> = /* @__PURE__ */ O
       opts.key === undefined &&
       opts.context === undefined &&
       opts._keyContext === undefined &&
-      (opts.dkLen === undefined || opts.dkLen === 32)
+      (!Object.hasOwn(opts, 'dkLen') || opts.dkLen === undefined || opts.dkLen === 32)
     ) {
       mod.segments['state.flags_chunks'][pos][0] = 1;
       return;

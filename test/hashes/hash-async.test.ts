@@ -19,6 +19,37 @@ const smallBatch = Array.from({ length: 3 }, (_, i) =>
 for (const name in PLATFORMS) {
   const p = PLATFORMS[name];
   describe(`hash async (${name})`, () => {
+    should.serial('digest lengths ignore inherited options', async () => {
+      const input = Uint8Array.of(1, 2, 3);
+      for (const hash of [p.sha256, p.blake2s, p.blake3, p.shake128, p.shake256]) {
+        const expected = hash(input);
+        const short = hash(input, { dkLen: 3 });
+        const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'dkLen');
+        Object.defineProperty(Object.prototype, 'dkLen', {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: 0,
+        });
+        try {
+          eql(
+            [
+              hash(input, {}),
+              hash(input, { dkLen: undefined }),
+              await hash.async(input),
+              hash.chunks([input]),
+              hash.parallel([input, input]),
+              hash.create().update(input).digest(),
+              hash(input, { dkLen: 3 }),
+            ],
+            [expected, expected, expected, expected, [expected, expected], expected, short]
+          );
+        } finally {
+          if (previous) Object.defineProperty(Object.prototype, 'dkLen', previous);
+          else delete (Object.prototype as { dkLen?: number }).dkLen;
+        }
+      }
+    });
     should('multipart finalizes empty input across hash families', async () => {
       const empty = new Uint8Array();
       for (const hash of [

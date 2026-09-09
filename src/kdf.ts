@@ -341,7 +341,7 @@ function mkArgon2(
       // ... (Opts, H0, B allocation - Same as previous stable version) ...
       if (!isU32(password.length)) throw new Error('password should be less than 4 GB');
       if (!isU32(salt.length) || salt.length < 8)
-        throw new Error('salt should be at least 8 bytes and less than 4 GB');
+        throw new Error('"salt" must be of length 8..4Gb');
       if (!Object.values(AT).includes(type)) throw new Error('invalid type');
       let { p, dkLen, m, t, version, key, personalization, maxmem } = argon2Opts(opts);
 
@@ -782,6 +782,7 @@ export function mkScrypt(
       anumber(N);
       anumber(r);
       anumber(p);
+      if (r < 1) throw new Error('"r" expected integer >= 1');
       const blockSize = 128 * r;
       const blockSize32 = blockSize / 4;
       // Max N is 2^32 because Integrify is 32-bit.
