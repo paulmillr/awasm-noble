@@ -1,4 +1,4 @@
-import bench from '@paulmillr/jsbt/benchmark.js';
+import bench, { section } from '@paulmillr/jsbt/benchmark.js';
 import { pbkdf2 } from '../src/kdf.ts';
 import * as wasm from '../src/targets/wasm/index.ts';
 
@@ -26,9 +26,7 @@ const BUFFERS = {
 
 async function main() {
   const data = BUFFERS['1mb'];
-  const opts = { bytes: data.byteLength };
   const cdata = BUFFERS['10mb'];
-  const copts = { bytes: cdata.byteLength };
   const libs = wasm;
 
   // prettier-ignore
@@ -44,19 +42,27 @@ async function main() {
   for (let i = 0; i < 1000; i++) chacha20poly1305(key, n12).encrypt(cdata);
 
   // Benchmarks
-  for (const title of hashes) {
-    const hash = libs[title];
-    await bench(title, () => hash(data), opts);
+  for (const size of ['32b', '1mb'] as const) {
+    const data = BUFFERS[size];
+    section(`Hashes ${size}`, size === '32b' ? { mode: 'time' } : { bytes: data });
+    for (const title of hashes) {
+      const hash = libs[title];
+      await bench(title, () => hash(data));
+    }
   }
-  await bench('chacha20poly1305', () => chacha20poly1305(key, n12).encrypt(cdata), copts);
-  await bench('aes-gcm-256', () => gcm(key, n12).encrypt(cdata), copts);
-  await bench('aes-gcm-siv-256', () => gcmsiv(key, n12).encrypt(cdata), copts);
-  await bench('chacha20', () => chacha20(key, n12).encrypt(cdata), copts);
-  await bench('aes-ecb-256', () => ecb(key).encrypt(cdata), copts);
-  await bench('aes-cbc-256', () => cbc(key, n16).encrypt(cdata), copts);
-  await bench('aes-ctr-256', () => ctr(key, n16).encrypt(cdata), copts);
+  for (const size of ['32b', '10mb'] as const) {
+    const data = BUFFERS[size];
+    section(`Ciphers ${size}`, size === '32b' ? { mode: 'time' } : { bytes: data });
+    await bench('chacha20poly1305', () => chacha20poly1305(key, n12).encrypt(data));
+    await bench('aes-gcm-256', () => gcm(key, n12).encrypt(data));
+    await bench('aes-gcm-siv-256', () => gcmsiv(key, n12).encrypt(data));
+    await bench('chacha20', () => chacha20(key, n12).encrypt(data));
+    await bench('aes-ecb-256', () => ecb(key).encrypt(data));
+    await bench('aes-cbc-256', () => cbc(key, n16).encrypt(data));
+    await bench('aes-ctr-256', () => ctr(key, n16).encrypt(data));
+  }
 
-  console.log('# KDF');
+  section('KDF');
   const pass = rbuf(12);
   const salt = rbuf(14);
   await bench(
