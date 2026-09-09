@@ -1,6 +1,6 @@
 {
   "name": "@awasm/noble",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "exports": {
     ".": "./src/index.ts",
     "./js.js": "./src/js.ts",
@@ -17,8 +17,8 @@
     "./webcrypto.js": "./src/webcrypto.ts"
   },
   "imports": {
-    "@noble/ciphers": "jsr:@noble/ciphers@~2.2.0",
-    "@noble/hashes": "jsr:@noble/hashes@~2.2.0"
+    "@noble/ciphers": "jsr:@noble/ciphers@2.4.0",
+    "@noble/hashes": "jsr:@noble/hashes@2.4.0"
   },
   "publish": {
     "include": ["src", "jsr.json", "LICENSE", "README.md"],
