@@ -273,7 +273,9 @@ export function genSha2<T extends UnsignedType>(
 }
 
 function keccakFn<T extends UnsignedType>(
-  f: Scope<{ rc: ArraySpec<ScalarSpec<'u64'>, readonly [24]> }>,
+  f: Pick<Scope, 'types' | 'getTypeGeneric' | 'doN1'> & {
+    memory: { rc: { [index: symbol]: { get(): Val<'u64'> } } };
+  },
   type: T,
   S: Val<any, T>[],
   rounds: number,
@@ -320,7 +322,7 @@ function keccakFn<T extends UnsignedType>(
 }
 
 function keccakBlockLenCb<T>(
-  f: Scope,
+  f: Pick<Scope, 'types' | 'block' | 'brIf'>,
   S: T[],
   blockLen: Val<'u32'>,
   cb: (S: any, i: number) => void

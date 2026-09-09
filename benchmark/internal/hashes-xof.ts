@@ -1,4 +1,4 @@
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 import { deepStrictEqual } from 'node:assert';
 // noble hashes
 import { blake3 } from '@noble/hashes/blake3.js';

@@ -1,4 +1,4 @@
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 
 import * as js from '../../src/targets/js/index.ts';
 import * as wasm from '../../src/targets/wasm/index.ts';

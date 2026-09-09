@@ -23,7 +23,7 @@ export function genScrypt(_type: TypeName, _opts = {}) {
   // on widened types so the emitted target code stays unchanged.
   type Word = Val<'u32', unknown>;
   type State = Word[] & { __state__?: never };
-  const salsa20_8 = (f: Scope, lanes: number, X: State): void =>
+  const salsa20_8 = (f: Pick<Scope, 'getType'>, lanes: number, X: State): void =>
     salsaCore(f, lanes, X as Word[], 8, true);
   return new Module('scrypt')
     .mem('xorInput', array('u32', {}, SCRYPT_BATCH, 16))

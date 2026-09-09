@@ -1,4 +1,4 @@
-import bench from '@paulmillr/jsbt/bench.js';
+import bench from '@paulmillr/jsbt/benchmark.js';
 import { pbkdf2 } from '../src/kdf.ts';
 import * as wasm from '../src/targets/wasm/index.ts';
 
@@ -77,4 +77,4 @@ async function main() {
   );
 }
 
-main();
+await main();

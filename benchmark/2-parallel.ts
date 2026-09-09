@@ -1,4 +1,4 @@
-import bench from '@paulmillr/jsbt/bench.js';
+import bench from '@paulmillr/jsbt/benchmark.js';
 import * as wasm_threads from '../src/targets/wasm_threads/index.ts';
 import { WP } from '../src/workers.ts';
 
@@ -74,4 +74,8 @@ async function main_threads() {
   await bench('aes-ctr-256', () => ctr(key, n16).encrypt(cdata), copts);
 }
 
-main_threads();
+try {
+  await main_threads();
+} finally {
+  WP.stop();
+}

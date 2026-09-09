@@ -54,7 +54,9 @@ type ArxState = StructSpec<{
 type ArxSegs = {
   state: ArxState;
 };
-type ArxScope = Scope<ArxSegs>;
+type ArxScope = Pick<Scope, 'types' | 'getType'> & {
+  memory: { state: { sigma: Pick<MemorySurface<ArxSegs>['state']['sigma'], 'get'> } };
+};
 
 type MacSegs = {
   state: StructSpec<{
@@ -67,7 +69,9 @@ type MacFns = {
   macBlocksAt: FnDef<['u32', 'u32', 'u32', 'u32'], void>;
   macPadAt: FnDef<['u32', 'u32', 'u32'], void>;
 };
-type MacScope = Scope<MacSegs, MacFns>;
+type MacScope = Pick<Scope, 'types' | 'ifElse'> & {
+  functions: Scope<{}, MacFns>['functions'];
+};
 
 type ArxCfg = {
   name: string;
@@ -94,7 +98,7 @@ type ArxCfg = {
 };
 
 export const chachaCore = (
-  f: Scope,
+  f: Pick<Scope, 'getType'>,
   lanes: number,
   X: Val<'u32', unknown>[],
   rounds: number,
@@ -128,7 +132,7 @@ export const chachaCore = (
 };
 
 export const salsaCore = (
-  f: Scope,
+  f: Pick<Scope, 'getType'>,
   lanes: number,
   X: Val<'u32', unknown>[],
   rounds: number,
@@ -314,7 +318,9 @@ export const genChacha = (type: TypeName, opts: { rounds: number }) => {
 // RFC 8439 §2.8.1 pad16(x): when the last stream block is partial, clear the
 // unused keystream tail so later MAC padding sees zero octets instead of stream bytes.
 const zeroTail = (
-  f: MacScope,
+  f: Pick<Scope, 'types' | 'ifElse'> & {
+    memory: { buffer: Pick<MemorySurface<MacSegs>['buffer'], 'as8'> };
+  },
   base: Val<'u32'>,
   bytes: Val<'u32'>,
   isLast: Val<'u32'>,
@@ -764,56 +770,60 @@ export const aesConsts = /* @__PURE__ */ struct({
   inited: 'u32',
 });
 
+type AesScope = Pick<Scope, 'types' | 'doN' | 'doN1' | 'ifElse'> & {
+  memory: { constants: MemorySurface<typeof aesConsts.fields> };
+};
+
 // Define an AES block-processing batchFn that follows the batchFn-only calling convention.
 //
 // - `lanes` is always 1 for t-tables (no SIMD lane plumbing here).
 // - `iters` are clamped by kernel from `(blocks - base)` so there are no trailing
 //   calls/branches and no duplicated AES call sites inside a single function body.
 // - `blocks` is passed as the first runtime input so the kernel can clamp correctly.
-export const aesBatchFn =
-  <
-    Name extends string,
-    F extends FnRegistry,
-    M extends Segs & {
-      state: StructSpec<{
-        rounds: ScalarSpec<'u32'>;
-        expandedKey: ArraySpec<ScalarSpec<'u32'>, readonly [number]>;
-      }>;
-      constants: typeof aesConsts;
-    },
-    Ctx extends Shape,
-  >(
-    name: Name,
-    dir: AesDir,
-    init: (f: Scope<M, F>, batchPos: Val<'u32'>, perBatch: Val<'u32'>, blocks: Val<'u32'>) => Ctx,
-    cb: (
-      f: Scope<M, F>,
-      ctx: Ctx,
-      processBlock: (in4: Val<'u32'>[]) => Val<'u32'>[],
-      pos: Val<'u32'>
-    ) => Ctx
-  ) =>
-  (mod: Module<M, F>) =>
-    mod.batchFn(
-      name,
-      { lanes: 1, perThread: MIN_PER_THREAD },
-      ['u32'],
-      (f: Scope<M, F>, _lanes, batchPos, perBatch, blocks) => {
-        const { u32 } = f.types;
-        const base = u32.mul(batchPos, perBatch);
-        const rem = u32.sub(blocks, base);
-        const iters = u32.select(u32.lt(rem, perBatch), rem, perBatch);
-        const roundsVal = f.memory.state.rounds.get();
-        const expKey = f.memory.state.expandedKey;
-        const ctx0 = init(f, batchPos, perBatch, blocks);
-        aesWithBlock(f, dir, roundsVal, expKey, (processBlock) => {
-          f.doN1([ctx0], iters, (i: Val<'u32'>, ctx: Ctx) => {
-            const pos = u32.add(base, i);
-            return [cb(f, ctx, processBlock, pos)];
-          });
+// Callers pass explicit module and state types to avoid recursively inferring the whole Module.
+export const aesBatchFn = <
+  Name extends string,
+  F extends FnRegistry,
+  M extends Segs & {
+    state: StructSpec<{
+      rounds: ScalarSpec<'u32'>;
+      expandedKey: ArraySpec<ScalarSpec<'u32'>, readonly [number]>;
+    }>;
+    constants: typeof aesConsts;
+  },
+  Ctx extends Shape,
+>(
+  mod: Module<M, F>,
+  name: Name,
+  dir: AesDir,
+  init: (f: Scope<M, F>, batchPos: Val<'u32'>, perBatch: Val<'u32'>, blocks: Val<'u32'>) => Ctx,
+  cb: (
+    f: Scope<M, F>,
+    ctx: Ctx,
+    processBlock: (in4: Val<'u32'>[]) => Val<'u32'>[],
+    pos: Val<'u32'>
+  ) => Ctx
+) =>
+  mod.batchFn(
+    name,
+    { lanes: 1, perThread: MIN_PER_THREAD },
+    ['u32'],
+    (f, _lanes, batchPos, perBatch, blocks) => {
+      const { u32 } = f.types;
+      const base = u32.mul(batchPos, perBatch);
+      const rem = u32.sub(blocks, base);
+      const iters = u32.select(u32.lt(rem, perBatch), rem, perBatch);
+      const roundsVal = f.memory.state.rounds.get();
+      const expKey = f.memory.state.expandedKey;
+      const ctx0 = init(f, batchPos, perBatch, blocks);
+      aesWithBlock(f, dir, roundsVal, expKey, (processBlock) => {
+        f.doN1([ctx0], iters, (i: Val<'u32'>, ctx: Ctx) => {
+          const pos = u32.add(base, i);
+          return [cb(f, ctx, processBlock, pos)];
         });
-      }
-    );
+      });
+    }
+  );
 
 type AesKeyStateSpec = StructSpec<{
   key: ArraySpec<ScalarSpec<'u32'>, readonly [number]>;
@@ -947,8 +957,8 @@ export const PCKS7 =
         return u32.select(bad, u32.const(0), last);
       });
 
-export const roundBlocks = <M extends Segs>(
-  f: Scope<M, {}>,
+export const roundBlocks = (
+  f: Pick<Scope, 'types' | 'ifElse'>,
   round: Val<'u32'>,
   dir: AesDir,
   doMac: () => void,
@@ -998,8 +1008,8 @@ const subWord = (u32: GetOps<'u32'>, sbox: MemU32, n: Val<'u32'>) => {
   return u32.or(u32.or(b0, b1), u32.or(b2, b3));
 };
 
-const aesExpandKey = <M extends Segs>(
-  f: Scope<M, {}>,
+const aesExpandKey = (
+  f: Pick<Scope, 'types' | 'doN'>,
   len: Val<'u32'>,
   key: MemU32,
   tmp: MemU32,
@@ -1072,8 +1082,8 @@ const AES_ORDERS_DEC = [
   [3, 2, 1, 0],
 ];
 
-export const aesKeyInitEnc = <M extends Segs & { constants: typeof aesConsts }>(
-  f: Scope<M, {}>,
+export const aesKeyInitEnc = (
+  f: AesScope,
   keyLen: Val<'u32'>,
   keyMem: MemU32,
   tmp: MemU32,
@@ -1095,8 +1105,8 @@ export const aesKeyInitEnc = <M extends Segs & { constants: typeof aesConsts }>(
 
 type RoundFn = (s0: Val<'u32'>, s1: Val<'u32'>, s2: Val<'u32'>, s3: Val<'u32'>) => Val<'u32'>;
 
-export const aesWithBlock = <M extends Segs & { constants: typeof aesConsts }>(
-  f: Scope<M, {}>,
+export const aesWithBlock = (
+  f: AesScope,
   dir: AesDir,
   roundsVal: Val<'u32'>,
   expKey: MemU32,
@@ -1167,9 +1177,7 @@ export const aesWithBlock = <M extends Segs & { constants: typeof aesConsts }>(
   cb(processBlock);
 };
 
-export const aesInitTables = <M extends Segs & { constants: typeof aesConsts }>(
-  f: Scope<M, {}>
-) => {
+export const aesInitTables = (f: AesScope) => {
   const constants = f.memory.constants;
   const { u32 } = f.types;
   f.ifElse(u32.eq(constants.inited.get(), u32.const(0)), [], () => {
@@ -1293,7 +1301,7 @@ export const bswap32 = (u32: GetOps<'u32'>, x: Val<'u32'>) =>
 // - In threads/batch kernels: derive per-block counters in locals (use `inplace`) and never
 //   touch shared state.
 // - After batching: update the stored counter once (use `memory`).
-export const incCounter = <M extends Segs>(f: Scope<M, {}>, isBE = false) => ({
+export const incCounter = (f: Pick<Scope, 'types' | 'block' | 'brIf'>, isBE = false) => ({
   inplace: (limbs: Val<'u32'>[], inc: Val<'u32'>): Val<'u32'>[] => {
     const { u32 } = f.types;
     // Hot-path for one-word counters: GCM/GCTR uses a big-endian inc32 word, while
@@ -1368,7 +1376,7 @@ export const incCounter = <M extends Segs>(f: Scope<M, {}>, isBE = false) => ({
 });
 
 // CMAC subkey doubling in GF(2^128): K1 = dbl(L), K2 = dbl(K1).
-export const cmacDbl = <M extends Segs>(f: Scope<M, {}>, src: MemU32) => {
+export const cmacDbl = (f: Pick<Scope, 'types' | 'doN1'>, src: MemU32) => {
   const { u32 } = f.types;
   const sb = src.as8('u8');
   let carry = u32.const(0);
@@ -1403,8 +1411,8 @@ export const cmacXor = (
     return u32.xor(v, iv[i]);
   });
 
-export const cmacSubkeysInit = <M extends Segs & { constants: typeof aesConsts }>(
-  f: Scope<M, {}>,
+export const cmacSubkeysInit = (
+  f: AesScope,
   len: Val<'u32'>,
   st: {
     key: MemU32;
@@ -1556,8 +1564,8 @@ export const genCmac = (_type: TypeName, _opts: {}) =>
 // - Kernels must compute `base=batchPos*perBatch` and clamp
 //   `iters=min(perBatch, blocks-base)` so there is a single call site
 //   without trailing calls/branches that duplicate AES call sites.
-export const callBatch = <M extends Segs, F extends FnRegistry>(
-  f: Scope<M, F>,
+export const callBatch = (
+  f: Pick<Scope, 'types' | 'flags' | 'ifElse'>,
   blocks: Val<'u32'>,
   call: (batchPos: Val<'u32'>, batchLen: Val<'u32'>, perBatch: Val<'u32'>) => void
 ) => {
@@ -1588,8 +1596,9 @@ export const genAesEcb = (_type: TypeName, _opts: {}) =>
       f.memory.state.as8('u8').zero();
       f.memory.buffer.as8().range(0, maxWritten).fill(0);
     })
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<'processBlocksEnc', typeof mod.functions, typeof mod.memory, []>(
+        mod,
         'processBlocksEnc',
         'encrypt',
         (_f, _batchPos, _perBatch) => [],
@@ -1600,8 +1609,9 @@ export const genAesEcb = (_type: TypeName, _opts: {}) =>
         }
       )
     )
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<'processBlocksDec', typeof mod.functions, typeof mod.memory, []>(
+        mod,
         'processBlocksDec',
         'decrypt',
         (_f, _batchPos, _perBatch) => [],
@@ -1787,8 +1797,9 @@ export const genAesCtr = (_type: TypeName, _opts: {}) => {
       f.memory.state.as8('u8').zero();
       f.memory.buffer.as8().range(0, maxWritten).fill(0);
     })
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<'processBlocks', typeof mod.functions, typeof mod.memory, Val<'u32'>[]>(
+        mod,
         'processBlocks',
         'encrypt',
         (f, batchPos, perBatch) => {
@@ -1864,8 +1875,14 @@ export const genAesGcm = (_type: TypeName, _opts: {}) => {
       });
       incCounter(f, true).memory(f.memory.state.nonce.range(3, 1), u32.const(1));
     })
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<
+        'processBlocks',
+        typeof mod.functions,
+        typeof mod.memory,
+        { n0: Val<'u32'>; n1: Val<'u32'>; n2: Val<'u32'>; ctr3: Val<'u32'> }
+      >(
+        mod,
         'processBlocks',
         'encrypt',
         (f, batchPos, perBatch) => {
@@ -2134,8 +2151,9 @@ export const genAesGcmSiv = (_type: TypeName, _opts: {}) => {
     .fn('decryptInit', ['u32', 'u32', 'u32'], 'void', (f, len, aadLo, aadHi) => {
       f.functions.encryptInit.call(len, aadLo, aadHi);
     })
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<'processBlocks', typeof mod.functions, typeof mod.memory, Val<'u32'>[]>(
+        mod,
         'processBlocks',
         'encrypt',
         (f, batchPos, perBatch) => {
@@ -2239,8 +2257,10 @@ export const genAesGcmSiv = (_type: TypeName, _opts: {}) => {
     });
 };
 
-const sivBlocks = <M extends Segs & { buffer: ArraySpec<ScalarSpec<'u32'>> }>(
-  f: Scope<M, {}>,
+const sivBlocks = (
+  f: Pick<Scope, 'types' | 'ifElse'> & {
+    memory: { buffer: Pick<MemU32, 'as8'> };
+  },
   blocks: Val<'u32'>,
   isLast: Val<'u32'>,
   left: Val<'u32'>,
@@ -2444,8 +2464,9 @@ export const genAesSiv = (_type: TypeName, _opts: {}) => {
         });
       });
     })
-    .use(
-      aesBatchFn(
+    .use((mod) =>
+      aesBatchFn<'processBlocks', typeof mod.functions, typeof mod.memory, Val<'u32'>[]>(
+        mod,
         'processBlocks',
         'encrypt',
         (f, batchPos, perBatch) => {
@@ -2524,8 +2545,10 @@ type AesWrapSegs = {
   buffer: typeof kwBuffer;
 };
 
-const kwBlocks = <M extends Segs & AesWrapSegs>(
-  f: Scope<M, {}>,
+const kwBlocks = (
+  f: Pick<Scope, 'types' | 'doN1'> & {
+    memory: { buffer: Pick<MemorySurface<AesWrapSegs>['buffer'], number> };
+  },
   blocks: Val<'u32'>,
   iters: Val<'u32'>,
   ctr0: Val<'u32'>,

@@ -2,7 +2,7 @@ import {
   ChaCha20Poly1305 as ChsfChachaPoly,
   newInstance as chainsafe_init_wasm,
 } from '@chainsafe/as-chacha20poly1305';
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 import * as js from '../../src/targets/js/index.ts';
 import * as wasm from '../../src/targets/wasm/index.ts';

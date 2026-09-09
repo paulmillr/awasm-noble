@@ -1,4 +1,4 @@
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 import { deepStrictEqual } from 'node:assert';
 import { scrypt, scryptAsync } from '@noble/hashes/scrypt.js';
 import { utf8ToBytes } from '@noble/hashes/utils.js';

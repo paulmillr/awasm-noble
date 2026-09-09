@@ -1,4 +1,4 @@
-import mark from '@paulmillr/jsbt/bench.js';
+import mark from '@paulmillr/jsbt/benchmark.js';
 import * as js from '../../src/targets/js/index.ts';
 import * as wasm from '../../src/targets/wasm/index.ts';
 

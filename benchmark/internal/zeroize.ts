@@ -1,4 +1,4 @@
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 
 import { cleanFast } from '../../src/utils.ts';
 

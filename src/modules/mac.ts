@@ -47,11 +47,11 @@ export const bswap64 = (u64: GetOps<'u64'>, u32: GetOps<'u32'>, x: Val<'u64'>) =
   const v2 = u64.or(u64.shl(u64.and(v1, m2), c16), u64.and(u64.shr(v1, c16), m2));
   return u64.or(u64.shl(v2, c32), u64.shr(v2, c32));
 };
-export const ghashInitTableCore64v = <M extends Segs, F extends FnRegistry>(
-  f: Scope<M, F>,
-  h: U32x4RowMem,
-  table: U64x2VecTableMem,
-  tmp: U64x2VecTableMem,
+export const ghashInitTableCore64v = (
+  f: Pick<Scope, 'types' | 'doN'>,
+  h: Pick<U32x4RowMem, 'get'>,
+  table: Pick<U64x2VecTableMem, symbol>,
+  tmp: Pick<U64x2VecTableMem, symbol>,
   mode: 'ghash' | 'polyval'
 ) => {
   const { u32, u64, u64x2, i32 } = f.types;
@@ -97,12 +97,12 @@ export const ghashInitTableCore64v = <M extends Segs, F extends FnRegistry>(
     return next;
   });
 };
-export const ghashBlocksTableCore64v = <M extends Segs, F extends FnRegistry>(
-  f: Scope<M, F>,
+export const ghashBlocksTableCore64v = (
+  f: Pick<Scope, 'types' | 'doN' | 'getTypeGeneric'>,
   blocks: Val<'u32'>,
-  buffer: U64x2VecTableMem,
+  buffer: Pick<U64x2VecTableMem, symbol>,
   y: U64x2ScalarMem,
-  table: U64x2VecTableMem,
+  table: Pick<U64x2VecTableMem, symbol>,
   mode: 'ghash' | 'polyval',
   clear = false
 ) => {
@@ -139,8 +139,13 @@ export const ghashBlocksTableCore64v = <M extends Segs, F extends FnRegistry>(
   ]);
   y.set(yv[0]);
 };
-const resetBatch = <M extends GhashBatchSegs | PolyBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const resetBatch = (
+  f: Pick<Scope, 'types' | 'doN'> & {
+    memory: {
+      state: { range(pos: Val<'u32'>, len: Val<'u32'>): { as8(): { zero(): void } } };
+      buffer: MemorySurface<BufSegs>['buffer'];
+    };
+  },
   pos: Val<'u32'>,
   len: Val<'u32'>,
   written: Val<'u32'>,
@@ -186,8 +191,13 @@ const ghashMod = (name: string) =>
         return u32.select(u32.eq(take, u32.const(0)), u32.const(1), u32.const(0));
       }
     );
-const ghashOutBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const ghashOutBlocks = (
+  f: Pick<Scope, 'types' | 'doN' | 'getTypeGeneric'> & {
+    memory: {
+      state: Pick<MemorySurface<GhashBatchSegs>['state'], symbol>;
+      buffer: MemorySurface<BufSegs>['buffer'];
+    };
+  },
   lanes: number,
   pos: Val<'u32'>,
   b: Val<'u32'>,
@@ -203,8 +213,13 @@ const ghashOutBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
     return (f.doN([], b, (chunkPos: Val<'u32'>) => (buffer[chunkPos].set(out), [])), []);
   });
 };
-const ghashProcessBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const ghashProcessBlocks = (
+  f: Pick<Scope, 'types' | 'doN' | 'getTypeGeneric'> & {
+    memory: {
+      state: Pick<MemorySurface<GhashBatchSegs>['state'], symbol>;
+      buffer: MemorySurface<BufSegs>['buffer'];
+    };
+  },
   lanes: number,
   pos: Val<'u32'>,
   b: Val<'u32'>,
@@ -223,8 +238,10 @@ const ghashProcessBlocks = <M extends GhashBatchSegs, F extends FnRegistry>(
     return [];
   });
 };
-const ghashInitBatch = <M extends GhashBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const ghashInitBatch = (
+  f: Pick<Scope, 'types' | 'doN'> & {
+    memory: { state: Pick<MemorySurface<GhashBatchSegs>['state'], symbol> };
+  },
   pos: Val<'u32'>,
   mode: 'ghash' | 'polyval'
 ) => {
@@ -403,11 +420,7 @@ const setU32Arr = (u32: GetOps<'u32'>, arr: U64View, vals: U32Arr, len: number, 
     if (clearHi) view[lo + 1].set(u32.const(0));
   }
 };
-const polyFinish = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
-  poly: PolyMem,
-  spec: LimbSpec
-) => {
+const polyFinish = (f: Pick<Scope, 'types'>, poly: PolyMem, spec: LimbSpec) => {
   const { u32, u64 } = f.types;
   const limbMask = u32.const(spec.mask);
   const c5 = u32.const(5);
@@ -455,8 +468,8 @@ const polyFinish = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
     carry = u64.shr(w, 32);
   }
 };
-const polyBlocksMul = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry, T>(
-  f: Scope<M, F>,
+const polyBlocksMul = <T>(
+  f: Pick<Scope, 'types' | 'doN1' | 'ifElse'>,
   poly: PolyMem,
   b: Val<'u32'>,
   last: Val<'u32'>,
@@ -486,8 +499,8 @@ const polyBlocksMul = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry,
     set(H);
   });
 };
-const polyBlocksMul4 = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const polyBlocksMul4 = (
+  f: Pick<Scope, 'types' | 'doN1' | 'ifElse'>,
   poly: PolyMem,
   b: Val<'u32'>,
   last: Val<'u32'>,
@@ -504,7 +517,7 @@ const polyBlocksMul4 = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
   let H = getU32Arr(poly.h, spec.count);
   const hasLeft = u32.ne(l, u32.const(0));
   const runSmall = (chunk: Val<'u32'>, read: (chunkPos: Val<'u32'>) => Val<'u32'>[]) =>
-    polyBlocksMul(f, poly, chunk, last, l, read, spec, r, r5, ops, set);
+    polyBlocksMul<Val<'u64'>>(f, poly, chunk, last, l, read, spec, r, r5, ops, set);
   f.ifElse(u32.or(u32.lt(b, u32.const(4)), u32.and(last, hasLeft)), [], () => {
     runSmall(b, read);
   });
@@ -577,8 +590,8 @@ const polyBlocksMul4 = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
     }
   );
 };
-const polyBlocksDual = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const polyBlocksDual = (
+  f: Pick<Scope, 'flags' | 'types' | 'doN1' | 'ifElse'>,
   poly: PolyMem,
   b: Val<'u32'>,
   last: Val<'u32'>,
@@ -587,9 +600,10 @@ const polyBlocksDual = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
 ) => {
   if (f.flags.native64bit) {
     const { u64 } = f.types;
-    const [rList, r5List] = [poly.r, poly.r5].map((src) =>
-      [src[0], src[1], src[2], src[3]].map((m) => getU32Arr(m, WIDE_LIMB_SPEC.count))
-    );
+    const readPowers = (src: Pick<PolyMem['r'], number>) =>
+      [0, 1, 2, 3].map((i) => getU32Arr(src[i], WIDE_LIMB_SPEC.count));
+    const rList = readPowers(poly.r);
+    const r5List = readPowers(poly.r5);
     polyBlocksMul4(
       f,
       poly,
@@ -609,7 +623,7 @@ const polyBlocksDual = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
     return;
   }
   const { u32 } = f.types;
-  polyBlocksMul(
+  polyBlocksMul<Val<'u32'>>(
     f,
     poly,
     b,
@@ -627,10 +641,7 @@ const polyBlocksDual = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry
     (H) => setU32Arr(u32, poly.h, H, LIMB_SPEC.count, false)
   );
 };
-const polyInit = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
-  poly: PolyMem
-) => {
+const polyInit = (f: Pick<Scope, 'flags' | 'types'>, poly: PolyMem) => {
   const { u32, u64 } = f.types;
   const key = poly.key.as8('u8');
   // RFC 8439 §2.5.1 parses Poly1305 key halves as little-endian numbers.
@@ -684,8 +695,10 @@ const polyInit = <M extends PolySegs | PolyBatchSegs, F extends FnRegistry>(
   }
   poly.h.as8().zero();
 };
-const polyPadAt = <M extends Segs & BufSegs, F extends FnRegistry>(
-  f: Scope<M, F>,
+const polyPadAt = (
+  f: Pick<Scope, 'types' | 'ifElse'> & {
+    memory: { buffer: Pick<MemorySurface<BufSegs>['buffer'], 'as8'> };
+  },
   base: Val<'u32'>,
   take: Val<'u32'>,
   left: Val<'u32'>
@@ -815,5 +828,4 @@ type BufSegs = { buffer: ArraySpec<ScalarSpec<'u32', unknown>, readonly [number,
 type StateSeg<S> = { state: S } & BufSegs;
 type GhashBatchSegs = StateSeg<ArraySpec<typeof ghashBatchState, readonly [number]>>;
 type PolySegs = StateSeg<StructSpec<{ poly: typeof polyState }>>;
-type PolyBatchSegs = StateSeg<ArraySpec<typeof polyBatchState, readonly [number]>>;
 type PolyMem = MemorySurface<{ poly: typeof polyState }>['poly'];

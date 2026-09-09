@@ -1,6 +1,6 @@
 import { describe, should } from '@paulmillr/jsbt/test.js';
 import { deepStrictEqual as eql, rejects, throws } from 'node:assert';
-import fc from 'fast-check';
+import * as random from '@paulmillr/jsbt/random.js';
 import { hmac } from '../src/hmac.ts';
 import * as u from '../src/utils.ts';
 
@@ -9,12 +9,12 @@ const spoofU16 = () => new (class Uint8Array extends Uint16Array {})([0x0102, 0x
 
 describe('utils', () => {
   should('copyFast preserves disjoint ranges and surrounding bytes', () => {
-    fc.assert(
-      fc.property(
-        fc.uint8Array({ maxLength: 256 }),
-        fc.nat(),
-        fc.nat(),
-        fc.boolean(),
+    random.assert(
+      random.property(
+        random.bytes({ maxLength: 256 }),
+        random.int({ min: 0 }),
+        random.int({ min: 0 }),
+        random.constantFrom(false, true),
         (bytes, a, b, shared) => {
           const srcPos = a % 3 ? a % (bytes.length + 1) : 0;
           const len = a % 3 ? b % (bytes.length - srcPos + 1) : bytes.length;

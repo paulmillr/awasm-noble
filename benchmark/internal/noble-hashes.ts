@@ -1,4 +1,4 @@
-import bench from '@paulmillr/jsbt/bench.js';
+import bench from '@paulmillr/jsbt/benchmark.js';
 import { pbkdf2 } from '../../src/kdf.ts';
 import { hmac } from '../../src/hmac.ts';
 import { hkdf } from '../../src/hkdf.ts';

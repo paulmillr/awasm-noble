@@ -120,7 +120,9 @@ export function getLanes(_type: TypeName) {
   return 4;
 }
 
-export function readMSG(f: Scope, region: any, clear = true) {
+// Keep helper scope types limited to the operations they use. Comparing full Scope/MemorySurface
+// types recursively expands unrelated memory views and can exceed TypeScript 7's instantiation limit.
+export function readMSG(f: Pick<Scope, 'getTypeGeneric'>, region: any, clear = true) {
   // `BUFFER.fill(0)` is slow garbage: even BUFFER.set() is faster,
   // but requires pre-allocated array of exact size.
   // So, instead of doing `fill` to zeroize data, we zeroize on read.

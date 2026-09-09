@@ -1,4 +1,4 @@
-import compare from '@paulmillr/jsbt/bench-compare.js';
+import compare from '@paulmillr/jsbt/benchmark-compare.js';
 import { deepStrictEqual } from 'node:assert';
 import { createRequire } from 'node:module';
 import { argon2d, argon2i, argon2id } from '@noble/hashes/argon2.js';
